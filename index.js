@@ -29,11 +29,17 @@ const DASHBOARD_PORT = Number(process.env.DASHBOARD_PORT || 8787);
 const ACTIVE_WINDOW_MS = Number(process.env.DASHBOARD_ACTIVE_WINDOW_MS || 10 * 60 * 1000);
 const ONLINE_STATUS_MESSAGE = '🟢 *Hora-claw is online!* I am ready to assist you.';
 const OFFLINE_STATUS_MESSAGE = '🔴 *Hora-claw is going offline!* I will be back shortly.';
+const ONLINE_STATUS_RETRY_INTERVAL_MS = parsePositiveNumber(process.env.ONLINE_STATUS_RETRY_INTERVAL_MS, 30 * 1000);
+const ONLINE_STATUS_RETRY_MAX_ATTEMPTS = Math.max(1, Math.floor(parsePositiveNumber(process.env.ONLINE_STATUS_RETRY_MAX_ATTEMPTS, 20)));
 
 const dashboardClients = new Set();
 const sessions = new Map();
 const bootOnlineNotifiedChats = new Set();
+const pendingOnlineStatusChats = new Set();
 let dashboardServer = null;
+let onlineRetryTimer = null;
+let onlineRetryInFlight = false;
+let onlineRetryAttempts = 0;
 
 const runtimeState = {
     startedAt: Date.now(),
@@ -691,12 +697,13 @@ async function sendStatusMessageToChat(chatId, message, options = {}) {
 }
 
 async function sendStatusUpdateOnce(message, options = {}) {
+    const recipients = Array.isArray(options.chatIds) ? options.chatIds.map(chatId => String(chatId)) : Array.from(knownChats);
     let sent = 0;
     let failed = 0;
     const onSuccess = typeof options.onSuccess === 'function' ? options.onSuccess : null;
     const label = options.label || 'status';
 
-    for (const chatId of knownChats) {
+    for (const chatId of recipients) {
         const sendResult = await sendStatusMessageToChat(chatId, message, options);
         if (sendResult.ok) {
             sent += 1;
@@ -709,15 +716,16 @@ async function sendStatusUpdateOnce(message, options = {}) {
         }
     }
 
-    return { sent, failed, total: knownChats.size };
+    return { sent, failed, total: recipients.length };
 }
 
 async function broadcastStatus(message, options = {}) {
     const attempts = Math.max(1, Math.floor(parsePositiveNumber(options.attempts, 1)));
     const retryDelayMs = parsePositiveNumber(options.retryDelayMs, 2500);
     const label = options.label || 'status';
+    const totalRecipients = Array.isArray(options.chatIds) ? options.chatIds.length : knownChats.size;
 
-    let result = { sent: 0, failed: 0, total: knownChats.size };
+    let result = { sent: 0, failed: 0, total: totalRecipients };
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
         result = await sendStatusUpdateOnce(message, options);
         if (result.total === 0 || result.sent > 0 || attempt === attempts) {
@@ -731,20 +739,108 @@ async function broadcastStatus(message, options = {}) {
     return result;
 }
 
+function stopOnlineRetryLoop() {
+    if (onlineRetryTimer) {
+        clearInterval(onlineRetryTimer);
+        onlineRetryTimer = null;
+    }
+    onlineRetryInFlight = false;
+    onlineRetryAttempts = 0;
+}
+
+async function flushPendingOnlineStatus(label = 'online') {
+    if (!runtimeState.botOnline || pendingOnlineStatusChats.size === 0) {
+        return {
+            sent: 0,
+            failed: 0,
+            total: pendingOnlineStatusChats.size,
+            pending: pendingOnlineStatusChats.size
+        };
+    }
+
+    const recipients = Array.from(pendingOnlineStatusChats);
+    const result = await broadcastStatus(ONLINE_STATUS_MESSAGE, {
+        attempts: 1,
+        label,
+        chatIds: recipients,
+        onSuccess: (chatId) => {
+            const key = String(chatId);
+            bootOnlineNotifiedChats.add(key);
+            pendingOnlineStatusChats.delete(key);
+        }
+    });
+
+    runtimeState.lastOnlineBroadcastAt = Date.now();
+    return { ...result, pending: pendingOnlineStatusChats.size };
+}
+
+function scheduleOnlineRetryLoop() {
+    if (onlineRetryTimer || !runtimeState.botOnline || pendingOnlineStatusChats.size === 0) {
+        return;
+    }
+
+    onlineRetryTimer = setInterval(() => {
+        if (onlineRetryInFlight) {
+            return;
+        }
+
+        if (!runtimeState.botOnline || pendingOnlineStatusChats.size === 0) {
+            stopOnlineRetryLoop();
+            return;
+        }
+
+        if (onlineRetryAttempts >= ONLINE_STATUS_RETRY_MAX_ATTEMPTS) {
+            console.warn(`[online-retry] Reached retry limit with ${pendingOnlineStatusChats.size} pending chat(s).`);
+            stopOnlineRetryLoop();
+            return;
+        }
+
+        onlineRetryInFlight = true;
+        onlineRetryAttempts += 1;
+        flushPendingOnlineStatus(`online-retry-${onlineRetryAttempts}`).then(result => {
+            console.log(`[online-retry] Attempt ${onlineRetryAttempts}: sent ${result.sent}/${result.total}, pending ${result.pending}`);
+            if (result.pending === 0) {
+                stopOnlineRetryLoop();
+            }
+        }).catch(error => {
+            console.error('[online-retry] Unexpected failure:', error);
+        }).finally(() => {
+            onlineRetryInFlight = false;
+        });
+    }, ONLINE_STATUS_RETRY_INTERVAL_MS);
+
+    if (typeof onlineRetryTimer.unref === 'function') {
+        onlineRetryTimer.unref();
+    }
+}
+
 async function ensureOnlineStatusForChat(chatId) {
     const key = String(chatId);
     if (!runtimeState.botOnline || bootOnlineNotifiedChats.has(key)) {
         return;
     }
 
-    const sendResult = await sendStatusMessageToChat(key, ONLINE_STATUS_MESSAGE, { label: 'online-fallback' });
-    if (sendResult.ok) {
-        bootOnlineNotifiedChats.add(key);
-        console.log(`[online-fallback] Delivered startup online status to ${key}.`);
-        return;
+    pendingOnlineStatusChats.add(key);
+    const result = await broadcastStatus(ONLINE_STATUS_MESSAGE, {
+        attempts: 1,
+        label: 'online-fallback',
+        chatIds: [key],
+        onSuccess: () => {
+            bootOnlineNotifiedChats.add(key);
+            pendingOnlineStatusChats.delete(key);
+        }
+    });
+
+    if (result.sent > 0) {
+        runtimeState.lastOnlineBroadcastAt = Date.now();
     }
 
-    console.error(`[online-fallback] Failed to send online status to ${key}:`, sendResult.error);
+    if (pendingOnlineStatusChats.has(key)) {
+        console.warn(`[online-fallback] Pending delivery for ${key}; scheduling retries.`);
+        scheduleOnlineRetryLoop();
+    } else if (result.sent > 0) {
+        console.log(`[online-fallback] Delivered startup online status to ${key}.`);
+    }
 }
 
 function isMissingSessionError(output = '') {
@@ -960,19 +1056,21 @@ bot.launch().then(async () => {
         console.log(`Merged ${mergedChatCount} chat(s) from disk before online status broadcast.`);
     }
 
-    console.log('hora-claw is running on Telegram!');
-    const onlineStatusResult = await broadcastStatus(ONLINE_STATUS_MESSAGE, {
-        attempts: 3,
-        retryDelayMs: 3000,
-        label: 'online',
-        onSuccess: (chatId) => {
-            bootOnlineNotifiedChats.add(String(chatId));
+    pendingOnlineStatusChats.clear();
+    for (const chatId of knownChats) {
+        if (!bootOnlineNotifiedChats.has(chatId)) {
+            pendingOnlineStatusChats.add(chatId);
         }
-    });
-    runtimeState.lastOnlineBroadcastAt = Date.now();
-    console.log(`Online status delivery: sent ${onlineStatusResult.sent}/${onlineStatusResult.total}, failed ${onlineStatusResult.failed}`);
+    }
+
+    console.log('hora-claw is running on Telegram!');
+    const onlineStatusResult = await flushPendingOnlineStatus('online-startup');
+    console.log(`Online status delivery: sent ${onlineStatusResult.sent}/${onlineStatusResult.total}, failed ${onlineStatusResult.failed}, pending ${onlineStatusResult.pending}`);
     if (onlineStatusResult.total === 0) {
         console.warn('[online] No known chats at startup. Online status will be sent when a chat next interacts.');
+    } else if (onlineStatusResult.pending > 0) {
+        console.warn(`[online] ${onlineStatusResult.pending} chat(s) still pending startup online delivery. Retrying in background.`);
+        scheduleOnlineRetryLoop();
     }
 }).catch(err => {
     console.error('Failed to launch bot:', err);
@@ -982,6 +1080,7 @@ const gracefulShutdown = async (signal) => {
     console.log(`Received ${signal}, shutting down...`);
 
     runtimeState.botOnline = false;
+    stopOnlineRetryLoop();
     broadcastDashboardUpdate('bot-offline');
     const offlineStatusResult = await broadcastStatus(OFFLINE_STATUS_MESSAGE, {
         attempts: 2,
