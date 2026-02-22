@@ -510,6 +510,9 @@ function handleDashboardRequest(req, res) {
 
         res.write('retry: 3000\n\n');
         dashboardClients.add(res);
+        res.on('error', () => {
+            dashboardClients.delete(res);
+        });
         sendSse(res, 'snapshot', { reason: 'initial', snapshot: buildDashboardSnapshot() });
 
         req.on('close', () => {
@@ -602,6 +605,17 @@ function isMissingSessionError(output = '') {
     ].some(fragment => text.includes(fragment));
 }
 
+function safeReply(ctx, text, extra) {
+    return ctx.reply(text, extra).catch(error => {
+        console.error('Failed to send Telegram reply:', error);
+        return null;
+    });
+}
+
+function isCommandText(text = '') {
+    return /^\/[a-z0-9_]+(?:@[a-z0-9_]+)?/i.test(String(text).trim());
+}
+
 function runGemini(prompt, useResume = true) {
     return new Promise((resolve, reject) => {
         const personaPrefix = "[System Context: You are a human-like claw named Hora-claw, serving the user via Telegram. You can do stuff. Never use the word 'agent', or refer to yourself as Gemini, a project, or a CLI. You are the claw itself.]\\n\\n";
@@ -641,7 +655,7 @@ bot.start((ctx) => {
     saveChatId(ctx.chat.id);
     markSessionSeen(ctx.chat.id);
     setSessionStatus(ctx.chat.id, 'idle');
-    ctx.reply('Welcome! I am Hora-claw. How can I help you today?');
+    safeReply(ctx, 'Welcome! I am Hora-claw. How can I help you today?');
 });
 
 bot.command('reset', async (ctx) => {
@@ -650,37 +664,52 @@ bot.command('reset', async (ctx) => {
     markSessionSeen(chatId);
     setSessionStatus(chatId, 'processing');
 
-    ctx.reply('Resetting my memory and starting a fresh session... 🧹');
+    safeReply(ctx, 'Resetting my memory and starting a fresh session... 🧹');
 
-    execFile(GEMINI_PATH, ['--delete-session', 'latest'], (error, stdout, stderr) => {
-        const cliOutput = `${stdout || ''}\n${stderr || ''}`.trim();
-        runtimeState.lastResetAt = Date.now();
+    try {
+        execFile(GEMINI_PATH, ['--delete-session', 'latest'], (error, stdout, stderr) => {
+            try {
+                const cliOutput = `${stdout || ''}\n${stderr || ''}`.trim();
+                runtimeState.lastResetAt = Date.now();
 
-        if (error && !isMissingSessionError(cliOutput)) {
-            console.error('Error deleting session:', error, cliOutput);
-            setSessionStatus(chatId, 'error', { lastSeenAt: Date.now(), lastError: cliOutput || error.message });
-            ctx.reply('I could not clear memory right now. Please try /reset again.');
-            return;
-        }
+                if (error && !isMissingSessionError(cliOutput)) {
+                    console.error('Error deleting session:', error, cliOutput);
+                    setSessionStatus(chatId, 'error', { lastSeenAt: Date.now(), lastError: cliOutput || error.message });
+                    safeReply(ctx, 'I could not clear memory right now. Please try /reset again.');
+                    return;
+                }
 
-        if (error && isMissingSessionError(cliOutput)) {
-            console.log('No existing latest session found; starting fresh.');
-            setSessionStatus(chatId, 'idle', { lastSeenAt: Date.now(), lastError: null });
-            ctx.reply('No previous memory was found. I am ready for a new task as Hora-claw.');
-            return;
-        }
+                if (error && isMissingSessionError(cliOutput)) {
+                    console.log('No existing latest session found; starting fresh.');
+                    setSessionStatus(chatId, 'idle', { lastSeenAt: Date.now(), lastError: null });
+                    safeReply(ctx, 'No previous memory was found. I am ready for a new task as Hora-claw.');
+                    return;
+                }
 
-        if (stderr && stderr.trim()) {
-            console.warn('Gemini delete-session warning:', stderr.trim());
-        }
+                if (stderr && stderr.trim()) {
+                    console.warn('Gemini delete-session warning:', stderr.trim());
+                }
 
-        setSessionStatus(chatId, 'idle', { lastSeenAt: Date.now(), lastError: null });
-        ctx.reply('Memory cleared! I am ready for a new task as Hora-claw.');
-    });
+                setSessionStatus(chatId, 'idle', { lastSeenAt: Date.now(), lastError: null });
+                safeReply(ctx, 'Memory cleared! I am ready for a new task as Hora-claw.');
+            } catch (callbackError) {
+                console.error('Unexpected /reset callback failure:', callbackError);
+                setSessionStatus(chatId, 'error', { lastSeenAt: Date.now(), lastError: callbackError.message });
+                safeReply(ctx, 'Reset failed due to an internal error. Please try /reset again.');
+            }
+        });
+    } catch (error) {
+        console.error('Failed to execute reset command:', error);
+        setSessionStatus(chatId, 'error', { lastSeenAt: Date.now(), lastError: error.message });
+        safeReply(ctx, 'Reset failed due to an internal error. Please try /reset again.');
+    }
 });
 
 bot.on('text', async (ctx) => {
     const userMessage = ctx.message.text;
+    if (isCommandText(userMessage)) {
+        return;
+    }
     const chatId = String(ctx.chat.id);
 
     console.log(`Received message: ${userMessage}`);
@@ -744,6 +773,18 @@ bot.on('text', async (ctx) => {
             lastError: error.message
         });
         ctx.reply('An error occurred. Gemini said: ' + error.message.substring(0, 150));
+    }
+});
+
+bot.catch((error, ctx) => {
+    console.error('Telegraf middleware error:', error);
+
+    if (ctx && ctx.chat && ctx.chat.id) {
+        setSessionStatus(String(ctx.chat.id), 'error', {
+            lastSeenAt: Date.now(),
+            lastError: error.message
+        });
+        safeReply(ctx, 'An internal bot error occurred. Please retry.');
     }
 });
 
