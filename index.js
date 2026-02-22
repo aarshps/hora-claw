@@ -1246,7 +1246,14 @@ startDashboardServer().catch(() => {
     // Error already logged in startDashboardServer.
 });
 
-bot.launch().then(async () => {
+bot.launch().catch(err => {
+    runtimeState.botOnline = false;
+    broadcastDashboardUpdate('bot-launch-error');
+    console.error('Failed to launch bot:', err);
+});
+
+// Execute startup logic concurrently with bot polling
+(async () => {
     runtimeState.botOnline = true;
     broadcastDashboardUpdate('bot-online');
 
@@ -1277,11 +1284,7 @@ bot.launch().then(async () => {
         console.warn(`[online] ${onlineStatusResult.pending} chat(s) still pending startup online delivery. Retrying in background.`);
         scheduleOnlineRetryLoop();
     }
-}).catch(err => {
-    runtimeState.botOnline = false;
-    broadcastDashboardUpdate('bot-launch-error');
-    console.error('Failed to launch bot:', err);
-});
+})();
 
 const gracefulShutdown = async (signal) => {
     console.log(`Received ${signal}, shutting down...`);
