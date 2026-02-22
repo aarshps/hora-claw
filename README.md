@@ -42,6 +42,7 @@ Hora-claw is a personalized autonomous agent built as a Telegram bot. It connect
    # Optional dashboard config
    DASHBOARD_HOST=0.0.0.0
    DASHBOARD_PORT=8787
+   DASHBOARD_PUBLIC_BASE_URL=https://your-server-domain-or-ip
 
    # Optional startup online-status retry behavior
    ONLINE_STATUS_RETRY_INTERVAL_MS=30000
@@ -69,6 +70,11 @@ If configured differently, use:
 ```text
 http://<DASHBOARD_HOST>:<DASHBOARD_PORT>/dashboard
 ```
+
+Notes:
+- If `DASHBOARD_PORT` is not set, the bot uses `PORT` (if present) and then falls back to `8787`.
+- Health check endpoint: `/healthz`
+- Telegram command `/dashboard` returns the currently configured dashboard URL.
 
 ### Stopping the Bot
 

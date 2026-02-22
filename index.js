@@ -30,7 +30,9 @@ const LEGACY_CHATS_FILES = Array.from(new Set([
 const GEMINI_PATH = 'C:\\Users\\Aarsh\\AppData\\Roaming\\npm\\gemini.cmd';
 
 const DASHBOARD_HOST = process.env.DASHBOARD_HOST || '0.0.0.0';
-const DASHBOARD_PORT = Number(process.env.DASHBOARD_PORT || 8787);
+const DASHBOARD_PORT = parsePositiveNumber(process.env.DASHBOARD_PORT || process.env.PORT, 8787);
+const APP_PORT_FALLBACK = parsePositiveNumber(process.env.PORT, 0);
+const DASHBOARD_PUBLIC_BASE_URL = (process.env.DASHBOARD_PUBLIC_BASE_URL || '').trim();
 const ACTIVE_WINDOW_MS = Number(process.env.DASHBOARD_ACTIVE_WINDOW_MS || 10 * 60 * 1000);
 const ONLINE_STATUS_MESSAGE = '🟢 *Hora-claw is online!* I am ready to assist you.';
 const OFFLINE_STATUS_MESSAGE = '🔴 *Hora-claw is going offline!* I will be back shortly.';
@@ -42,6 +44,8 @@ const sessions = new Map();
 const bootOnlineNotifiedChats = new Set();
 const pendingOnlineStatusChats = new Set();
 let dashboardServer = null;
+let dashboardStartPromise = null;
+let dashboardPortInUse = DASHBOARD_PORT;
 let onlineRetryTimer = null;
 let onlineRetryInFlight = false;
 let onlineRetryAttempts = 0;
@@ -51,7 +55,8 @@ const runtimeState = {
     botOnline: false,
     totalMessages: 0,
     lastResetAt: null,
-    lastOnlineBroadcastAt: null
+    lastOnlineBroadcastAt: null,
+    dashboardReady: false
 };
 
 function ensureDataDir() {
@@ -223,6 +228,13 @@ function buildDashboardSnapshot() {
         generatedAt: now,
         activeWindowMs: ACTIVE_WINDOW_MS,
         runtimeState,
+        dashboard: {
+            ready: runtimeState.dashboardReady,
+            host: DASHBOARD_HOST,
+            port: dashboardPortInUse,
+            url: getDashboardUrl(dashboardPortInUse),
+            healthUrl: `${getDashboardUrl(dashboardPortInUse).replace(/\/dashboard$/, '')}/healthz`
+        },
         totals: {
             linked: sessionList.length,
             active: sessionList.filter(item => item.isActive).length,
@@ -607,7 +619,7 @@ function renderDashboardPage() {
 }
 
 function handleDashboardRequest(req, res) {
-    const host = req.headers.host || `localhost:${DASHBOARD_PORT}`;
+    const host = req.headers.host || `localhost:${dashboardPortInUse}`;
     const requestUrl = new URL(req.url || '/', `http://${host}`);
     const pathname = requestUrl.pathname;
 
@@ -620,6 +632,17 @@ function handleDashboardRequest(req, res) {
     if (req.method === 'GET' && pathname === '/api/state') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(buildDashboardSnapshot()));
+        return;
+    }
+
+    if (req.method === 'GET' && pathname === '/healthz') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+            ok: true,
+            dashboardReady: runtimeState.dashboardReady,
+            dashboardPort: dashboardPortInUse,
+            botOnline: runtimeState.botOnline
+        }));
         return;
     }
 
@@ -648,23 +671,112 @@ function handleDashboardRequest(req, res) {
     res.end('Not found');
 }
 
-function startDashboardServer() {
-    if (dashboardServer) {
-        return;
+function getDashboardUrl(port = dashboardPortInUse) {
+    if (DASHBOARD_PUBLIC_BASE_URL) {
+        return `${DASHBOARD_PUBLIC_BASE_URL.replace(/\/+$/, '')}/dashboard`;
     }
 
-    dashboardServer = http.createServer(handleDashboardRequest);
-    dashboardServer.on('error', (error) => {
-        console.error('Dashboard server error:', error);
-    });
+    const hostForUrl = DASHBOARD_HOST === '0.0.0.0' ? 'localhost' : DASHBOARD_HOST;
+    return `http://${hostForUrl}:${port}/dashboard`;
+}
 
-    dashboardServer.listen(DASHBOARD_PORT, DASHBOARD_HOST, () => {
-        console.log(`Dashboard is live at http://localhost:${DASHBOARD_PORT}/dashboard`);
+function getDashboardPortCandidates() {
+    const candidates = [DASHBOARD_PORT];
+    if (APP_PORT_FALLBACK > 0 && !candidates.includes(APP_PORT_FALLBACK)) {
+        candidates.push(APP_PORT_FALLBACK);
+    }
+    return candidates;
+}
+
+function listenDashboardOnPort(server, host, port) {
+    return new Promise((resolve, reject) => {
+        const onError = (error) => {
+            cleanup();
+            reject(error);
+        };
+
+        const onListening = () => {
+            cleanup();
+            resolve();
+        };
+
+        const cleanup = () => {
+            server.off('error', onError);
+            server.off('listening', onListening);
+        };
+
+        server.once('error', onError);
+        server.once('listening', onListening);
+        server.listen(port, host);
     });
 }
 
+function startDashboardServer() {
+    if (dashboardStartPromise) {
+        return dashboardStartPromise;
+    }
+
+    dashboardServer = http.createServer(handleDashboardRequest);
+    dashboardStartPromise = (async () => {
+        const candidates = getDashboardPortCandidates();
+        let lastError = null;
+
+        for (const port of candidates) {
+            try {
+                await listenDashboardOnPort(dashboardServer, DASHBOARD_HOST, port);
+                dashboardPortInUse = Number(dashboardServer.address()?.port || port);
+                runtimeState.dashboardReady = true;
+
+                dashboardServer.on('error', (error) => {
+                    console.error('Dashboard server error:', error);
+                });
+
+                console.log(`Dashboard is live at ${getDashboardUrl(dashboardPortInUse)}`);
+                if (DASHBOARD_HOST === '0.0.0.0') {
+                    console.log(`Dashboard local shortcut: http://localhost:${dashboardPortInUse}/dashboard`);
+                }
+                return;
+            } catch (error) {
+                lastError = error;
+                const code = error?.code || 'UNKNOWN';
+                console.warn(`Dashboard bind failed on ${DASHBOARD_HOST}:${port} (${code}).`);
+                if (code !== 'EADDRINUSE' && code !== 'EACCES') {
+                    break;
+                }
+            }
+        }
+
+        runtimeState.dashboardReady = false;
+        throw lastError || new Error('Unable to start dashboard server');
+    })().catch((error) => {
+        console.error('Dashboard server failed to start:', error);
+        dashboardStartPromise = null;
+        if (dashboardServer) {
+            try {
+                dashboardServer.close();
+            } catch (closeError) {
+                console.error('Failed to close dashboard server after startup error:', closeError);
+            }
+        }
+        dashboardServer = null;
+        throw error;
+    });
+
+    return dashboardStartPromise;
+}
+
 async function stopDashboardServer() {
+    if (dashboardStartPromise) {
+        try {
+            await dashboardStartPromise;
+        } catch (error) {
+            // Startup already logged; continue with cleanup.
+        }
+    }
+
     if (!dashboardServer) {
+        runtimeState.dashboardReady = false;
+        dashboardStartPromise = null;
         return;
     }
 
@@ -681,7 +793,10 @@ async function stopDashboardServer() {
         dashboardServer.close(() => resolve());
     });
 
+    runtimeState.dashboardReady = false;
+    dashboardPortInUse = DASHBOARD_PORT;
     dashboardServer = null;
+    dashboardStartPromise = null;
 }
 
 function saveChatId(chatId) {
@@ -991,6 +1106,11 @@ bot.start((ctx) => {
     safeReply(ctx, 'Welcome! I am Hora-claw. How can I help you today?');
 });
 
+bot.command('dashboard', async (ctx) => {
+    const url = getDashboardUrl(dashboardPortInUse);
+    safeReply(ctx, `Dashboard: ${url}`);
+});
+
 bot.command('reset', async (ctx) => {
     const chatId = String(ctx.chat.id);
     saveChatId(chatId);
@@ -1122,9 +1242,12 @@ bot.catch((error, ctx) => {
     }
 });
 
+startDashboardServer().catch(() => {
+    // Error already logged in startDashboardServer.
+});
+
 bot.launch().then(async () => {
     runtimeState.botOnline = true;
-    startDashboardServer();
     broadcastDashboardUpdate('bot-online');
 
     const mergedChatCount = mergeKnownChatsFromDisk();
@@ -1155,6 +1278,8 @@ bot.launch().then(async () => {
         scheduleOnlineRetryLoop();
     }
 }).catch(err => {
+    runtimeState.botOnline = false;
+    broadcastDashboardUpdate('bot-launch-error');
     console.error('Failed to launch bot:', err);
 });
 
