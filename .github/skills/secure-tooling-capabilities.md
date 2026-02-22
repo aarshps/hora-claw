@@ -9,12 +9,10 @@ Hora-claw now supports web browsing, API calls, and temporary script execution w
 ## Repo-Scoped Tool Permissions
 
 1. Project tool policy is in `.gemini/settings.json`.
-2. Keep web tools enabled:
-3. `google_web_search`
-4. `web_fetch`
-5. Keep shell access restricted to the tool runner command patterns only:
-6. `node ./scripts/hora_tool_runner.js` (and platform variants already listed there).
-7. Do not widen shell patterns unless explicitly required and reviewed.
+2. Keep shell access restricted to the tool runner command patterns only:
+3. `node ./scripts/hora_tool_runner.js` (and platform variants already listed there).
+4. Do not widen shell patterns unless explicitly required and reviewed.
+5. Avoid strict `tools.core` allowlists unless validated against installed Gemini CLI version.
 
 ## Tool Runner Contract
 

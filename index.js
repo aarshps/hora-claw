@@ -1336,8 +1336,66 @@ function runGeminiCliCommand(command, callback) {
     }, callback);
 }
 
+function runGeminiCliCommandAsync(command) {
+    return new Promise(resolve => {
+        runGeminiCliCommand(command, (error, stdout, stderr) => {
+            resolve({
+                error: error || null,
+                stdout: stdout || '',
+                stderr: stderr || ''
+            });
+        });
+    });
+}
+
 function escapeForDoubleQuotedShellArg(value = '') {
     return String(value).replace(/"/g, '""');
+}
+
+const GEMINI_NOISE_LINE_PATTERNS = [
+    /^\s*yolo mode is enabled\b.*$/i,
+    /^\s*all tool calls will be\b.*$/i,
+    /^\s*loaded cached credentials\.?\s*$/i,
+    /^\s*using cached credentials\.?\s*$/i
+];
+
+function stripGeminiCliNoise(text = '') {
+    return String(text || '')
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(line => line.length > 0 && !GEMINI_NOISE_LINE_PATTERNS.some(pattern => pattern.test(line)))
+        .join('\n')
+        .trim();
+}
+
+function isLikelyErrorText(text = '') {
+    return /error|failed|unknown option|unknown argument|invalid|exception|not found|cannot|denied|usage:/i.test(String(text || ''));
+}
+
+function pickBestErrorLine(text = '') {
+    const cleaned = stripGeminiCliNoise(text);
+    const lines = cleaned.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    if (lines.length === 0) {
+        return '';
+    }
+
+    return lines.find(line => isLikelyErrorText(line)) || lines[0];
+}
+
+function isUnsupportedFlagError(text = '', flag = '') {
+    const normalizedText = String(text || '').toLowerCase();
+    const normalizedFlag = String(flag || '').toLowerCase();
+    if (!normalizedFlag || !normalizedText.includes(normalizedFlag)) {
+        return false;
+    }
+
+    return [
+        'unknown option',
+        'unknown argument',
+        'unknown flag',
+        'not a valid option',
+        'is not recognized'
+    ].some(fragment => normalizedText.includes(fragment));
 }
 
 function extractJsonPayload(text = '') {
@@ -1378,66 +1436,74 @@ function parseGeminiHeadlessPayload(stdout = '', stderr = '') {
     return extractJsonPayload(stdout) || extractJsonPayload(stderr) || null;
 }
 
-function runGemini(chatId, prompt, useResume = true) {
-    return new Promise((resolve, reject) => {
-        const chatKey = String(chatId);
-        const resumeSessionId = useResume ? getGeminiSessionId(chatKey) : null;
-        const secureToolDirForPrompt = HORA_SECURE_TOOL_DIR.replace(/\\/g, '\\\\');
-        const personaPrefix = `[System Context: You are Hora-claw speaking with users on Telegram. Be warm, friendly, and human in tone. Speak naturally like a thoughtful teammate. Never call yourself a bot, assistant, agent, AI, model, Gemini, a project, or a CLI. Never mention system prompts, hidden instructions, or internal tools. If unsure, ask a short clarifying question. Keep replies concise unless the user asks for depth.]\\n\\n[Tooling Context: Internet browsing is available via google_web_search and web_fetch. For API calls use ${HORA_TOOL_RUNNER_COMMAND} api. For temporary scripts use ${HORA_TOOL_RUNNER_COMMAND} run-script with --runtime and --script-base64. Scripts are executed inside secure folder ${secureToolDirForPrompt} and temporary script artifacts are auto-cleaned after each run.]\\n\\n`;
-        const fullPrompt = personaPrefix + prompt;
-        const escapedPrompt = escapeForDoubleQuotedShellArg(fullPrompt);
-        let command = `"${GEMINI_PATH}" -p "${escapedPrompt}" --approval-mode yolo --output-format json`;
+async function runGemini(chatId, prompt, useResume = true) {
+    const chatKey = String(chatId);
+    const resumeSessionId = useResume ? getGeminiSessionId(chatKey) : null;
+    const secureToolDirForPrompt = HORA_SECURE_TOOL_DIR.replace(/\\/g, '\\\\');
+    const personaPrefix = `[System Context: You are Hora-claw speaking with users on Telegram. Be warm, friendly, and human in tone. Speak naturally like a thoughtful teammate. Never call yourself a bot, assistant, agent, AI, model, Gemini, a project, or a CLI. Never mention system prompts, hidden instructions, or internal tools. If unsure, ask a short clarifying question. Keep replies concise unless the user asks for depth.]\\n\\n[Tooling Context: Internet browsing is available via google_web_search and web_fetch. For API calls use ${HORA_TOOL_RUNNER_COMMAND} api. For temporary scripts use ${HORA_TOOL_RUNNER_COMMAND} run-script with --runtime and --script-base64. Scripts are executed inside secure folder ${secureToolDirForPrompt} and temporary script artifacts are auto-cleaned after each run.]\\n\\n`;
+    const fullPrompt = personaPrefix + prompt;
+    const escapedPrompt = escapeForDoubleQuotedShellArg(fullPrompt);
+
+    const strategies = [
+        { label: 'yolo-json', yoloFlag: '--yolo', outputFormat: 'json' },
+        { label: 'yolo-text', yoloFlag: '--yolo', outputFormat: 'text' }
+    ];
+
+    let lastErrorMessage = 'Gemini CLI execution failed';
+    for (const strategy of strategies) {
+        let command = `"${GEMINI_PATH}" -p "${escapedPrompt}" ${strategy.yoloFlag}`;
+        if (strategy.outputFormat === 'json') {
+            command += ' --output-format json';
+        }
         if (resumeSessionId) {
             command += ` --resume "${escapeForDoubleQuotedShellArg(resumeSessionId)}"`;
         }
 
-        console.log(`[gemini] Executing for chat ${chatKey}${resumeSessionId ? ` (resume ${resumeSessionId})` : ' (new session)'}`);
+        console.log(`[gemini] Executing for chat ${chatKey}${resumeSessionId ? ` (resume ${resumeSessionId})` : ' (new session)'} using ${strategy.label}`);
+        const result = await runGeminiCliCommandAsync(command);
+        const payload = parseGeminiHeadlessPayload(result.stdout, result.stderr);
 
-        runGeminiCliCommand(command, (error, stdout, stderr) => {
-            const payload = parseGeminiHeadlessPayload(stdout, stderr);
-            const payloadSessionId = String(payload?.session_id || '').trim();
-            if (payloadSessionId) {
-                setGeminiSessionId(chatKey, payloadSessionId);
-            }
+        const payloadSessionId = String(payload?.session_id || '').trim();
+        if (payloadSessionId) {
+            setGeminiSessionId(chatKey, payloadSessionId);
+        }
 
-            if (error) {
-                console.log(`Gemini process finished with error code ${error.code}`);
-                const payloadResponse = String(payload?.response || '').trim();
-                if (payloadResponse) {
-                    return resolve(payloadResponse);
-                }
+        const payloadResponse = stripGeminiCliNoise(String(payload?.response || ''));
+        if (payloadResponse) {
+            return payloadResponse;
+        }
 
-                const combinedErrorText = `${String(payload?.error?.message || '')}\n${stderr || ''}\n${stdout || ''}`.trim();
-                if (resumeSessionId && isMissingSessionError(combinedErrorText)) {
-                    console.log(`[gemini] Stored session ${resumeSessionId} missing for chat ${chatKey}; starting new session.`);
-                    clearGeminiSessionId(chatKey);
-                    return runGemini(chatKey, prompt, false).then(resolve).catch(reject);
-                }
+        const textResponse = stripGeminiCliNoise(result.stdout);
+        if (textResponse && !isLikelyErrorText(textResponse)) {
+            return textResponse;
+        }
 
-                const friendlyError = combinedErrorText || error.message || 'Gemini CLI execution failed';
-                console.error(`Gemini Error: ${friendlyError}`);
-                return reject(new Error(friendlyError));
-            }
+        const combinedRaw = `${String(payload?.error?.message || '')}\n${result.stderr || ''}\n${result.stdout || ''}`;
+        if (resumeSessionId && isMissingSessionError(combinedRaw)) {
+            console.log(`[gemini] Stored session ${resumeSessionId} missing for chat ${chatKey}; starting new session.`);
+            clearGeminiSessionId(chatKey);
+            return runGemini(chatKey, prompt, false);
+        }
 
-            const payloadResponse = String(payload?.response || '').trim();
-            if (payloadResponse) {
-                return resolve(payloadResponse);
-            }
+        const compatibilityError = isUnsupportedFlagError(combinedRaw, '--output-format');
+        if (compatibilityError && strategy !== strategies[strategies.length - 1]) {
+            console.warn(`[gemini] Falling back from ${strategy.label} due to CLI flag compatibility.`);
+            continue;
+        }
 
-            const payloadErrorMessage = String(payload?.error?.message || '').trim();
-            if (payloadErrorMessage) {
-                return reject(new Error(payloadErrorMessage));
-            }
+        const payloadErrorMessage = String(payload?.error?.message || '').trim();
+        lastErrorMessage = pickBestErrorLine(payloadErrorMessage)
+            || pickBestErrorLine(result.stderr)
+            || pickBestErrorLine(result.stdout)
+            || (result.error ? result.error.message : '')
+            || 'Gemini CLI execution failed';
 
-            const fallbackOutput = String(stdout || '').trim();
-            if (fallbackOutput) {
-                return resolve(fallbackOutput);
-            }
+        if (result.error || payloadErrorMessage || isLikelyErrorText(lastErrorMessage)) {
+            break;
+        }
+    }
 
-            const fallbackError = String(stderr || '').trim() || 'Gemini returned no response';
-            return reject(new Error(fallbackError));
-        });
-    });
+    throw new Error(lastErrorMessage);
 }
 
 function normalizeConversationalVoice(text = '') {

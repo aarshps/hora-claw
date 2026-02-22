@@ -1,9 +1,9 @@
 {
-  "version": "1.2.0",
+  "version": "1.2.1",
   "highlights": [
-    "Fixed headless Gemini response handling to prevent YOLO/CLI warnings from breaking chat replies.",
-    "Switched to per-chat Gemini session IDs so each Telegram user now has isolated memory and no cross-user session sharing.",
-    "Updated /reset to clear only that chat's own session safely and consistently.",
-    "Kept versioned online/offline announcements and startup release notes active for the new version."
+    "Kept Hora-claw in strict --yolo mode while adding compatibility fallback when --output-format json is unsupported.",
+    "Filtered noisy CLI banner lines (including YOLO mode notices) from user-facing error messages so real failures are shown.",
+    "Simplified project Gemini settings to avoid strict tool-core compatibility breakage across CLI versions.",
+    "Preserved per-chat isolated sessions and versioned online/offline + startup release-note announcements."
   ]
 }

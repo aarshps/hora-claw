@@ -10,12 +10,13 @@ Hora-claw shells out to a global Gemini CLI binary on Windows.
 
 1. Use `exec(...)` for `gemini.cmd` commands; avoid `execFile(...)` for `.cmd` to prevent `spawn EINVAL`.
 2. Build commands with quoted binary path:
-3. Example shape: `"${GEMINI_PATH}" -p "..." --approval-mode yolo --output-format json --resume "<session-id>"`.
+3. Example shape: `"${GEMINI_PATH}" -p "..." --yolo --output-format json --resume "<session-id>"`.
 4. Centralize execution in one helper (current code: `runGeminiCliCommand`) with:
 5. `windowsHide: true`
 6. bounded `timeout` (`GEMINI_EXEC_TIMEOUT_MS`)
 7. bounded `maxBuffer` (`GEMINI_EXEC_MAX_BUFFER_BYTES`)
 8. Parse JSON headless output (`response`, `session_id`, `error`) from stdout/stderr.
+9. If `--output-format` is unsupported in installed CLI, fallback once to `--yolo` text output mode.
 
 ## Resume and Reset Behavior
 
@@ -30,6 +31,7 @@ Hora-claw shells out to a global Gemini CLI binary on Windows.
 
 1. Wrap reset callback logic in defensive `try/catch` to avoid callback crashes.
 2. Never treat non-fatal stderr alone as hard failure.
-3. Keep a dedicated missing-session matcher (`isMissingSessionError`) and update it if CLI wording changes.
-4. Preserve persona/system prefix behavior before passing `-p` prompt text.
-5. If command invocation behavior changes, update this skill with exact error signatures.
+3. Filter known CLI noise lines (for example "YOLO mode is enabled...") before surfacing user-facing errors.
+4. Keep a dedicated missing-session matcher (`isMissingSessionError`) and update it if CLI wording changes.
+5. Preserve persona/system prefix behavior before passing `-p` prompt text.
+6. If command invocation behavior changes, update this skill with exact error signatures.
