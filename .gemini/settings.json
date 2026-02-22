@@ -1,0 +1,21 @@
+{
+  "tools": {
+    "sandbox": true,
+    "core": [
+      "list_directory",
+      "read_file",
+      "read_many_files",
+      "write_file",
+      "replace",
+      "glob",
+      "grep",
+      "save_memory",
+      "google_web_search",
+      "web_fetch",
+      "run_shell_command(node ./scripts/hora_tool_runner.js)",
+      "run_shell_command(node scripts/hora_tool_runner.js)",
+      "run_shell_command(node .\\\\scripts\\\\hora_tool_runner.js)",
+      "run_shell_command(node scripts\\\\hora_tool_runner.js)"
+    ]
+  }
+}

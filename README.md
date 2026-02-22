@@ -10,6 +10,7 @@ Hora-claw is a personalized autonomous agent built as a Telegram bot. It connect
 - **Persistent Typing Indicator**: Shows a continuous "typing..." action in Telegram while Gemini is processing the request, providing real-time feedback.
 - **Status Broadcasts**: Notifies all users who have interacted with the bot when Hora-claw goes online or offline.
 - **Live Dashboard**: Exposes a real-time, dark-mode dashboard for linked sessions, activity, and errors.
+- **Web + API + Script Ops**: Supports internet browsing tools, direct API calls, and secure temporary script execution with automatic cleanup.
 - **Graceful Shutdown**: Handles `SIGINT` and `SIGTERM` signals to broadcast the offline status before exiting.
 
 ## Prerequisites
@@ -47,6 +48,15 @@ Hora-claw is a personalized autonomous agent built as a Telegram bot. It connect
    # Optional startup online-status retry behavior
    ONLINE_STATUS_RETRY_INTERVAL_MS=30000
    ONLINE_STATUS_RETRY_MAX_ATTEMPTS=20
+
+   # Optional secure tool runner directory (used for temp scripts/execution)
+   HORA_SECURE_TOOL_DIR=/absolute/path/for/hora-claw-secure-tools
+
+   # Optional secure script/API limits
+   HORA_SECURE_SCRIPT_TIMEOUT_MS=120000
+   HORA_SECURE_SCRIPT_MAX_BUFFER_BYTES=4194304
+   HORA_API_TIMEOUT_MS=45000
+   HORA_API_MAX_RESPONSE_BYTES=524288
    ```
 
 ## Usage
@@ -76,6 +86,20 @@ Notes:
 - Health check endpoint: `/healthz`
 - Telegram command `/dashboard` returns the currently configured dashboard URL.
 
+### Secure Tool Runner
+
+Hora-claw includes a local tool runner at:
+
+```text
+scripts/hora_tool_runner.js
+```
+
+It supports:
+- `api`: outbound HTTP(S) API calls with method/headers/body support.
+- `run-script`: executes temporary scripts (`node`, `python`, `bash`, `powershell`) in a secure folder.
+
+For `run-script`, a temporary run directory is created under `HORA_SECURE_TOOL_DIR` (or `~/.hora-claw/secure-tools`), and script artifacts are removed automatically after execution.
+
 ### Stopping the Bot
 
 To gracefully stop the bot and allow it to broadcast its offline status, use `Ctrl+C` or send a termination signal to the Node process.
@@ -88,7 +112,7 @@ Stop-Process -Name "node" -Force # Windows PowerShell example
 
 1. **Initialization**: At startup, the bot loads chat IDs from a persistent data directory (`HORA_DATA_DIR`, default `~/.hora-claw/chats.json`) and runs startup online-status delivery with retries for pending recipients.
 2. **Receiving Messages**: When a user sends a message, the bot saves their Chat ID and starts a persistent typing indicator.
-3. **Execution**: The bot spans a child process to execute the `gemini` CLI command, passing the user's message as the prompt. It attempts to resume the `latest` session. If no session exists, it falls back to a new session.
+3. **Execution**: The bot spawns a child process to execute the `gemini` CLI command, passing the user's message as the prompt. It attempts to resume the `latest` session. If no session exists, it falls back to a new session.
 4. **Session + Status Tracking**: Runtime session state is tracked and streamed to the dashboard through server-sent events.
 5. **Formatting**: The raw markdown output from Gemini is parsed using the `marked` library, converted to HTML, and stripped of tags not supported by Telegram using `striptags`.
 6. **Replying**: The formatted HTML is sent back to the user in Telegram. Long responses are automatically chunked into 4000-character segments to comply with Telegram's limits.
