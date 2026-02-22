@@ -319,22 +319,12 @@ function renderDashboardPage() {
       margin-bottom: 14px;
     }
 
-    .brand-logo-canvas {
+    .brand-logo {
       width: 38px;
       height: 38px;
-      border-radius: 50%;
-      border: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.02);
-      display: grid;
-      place-items: center;
-      overflow: hidden;
-      flex: 0 0 auto;
-    }
-
-    .brand-logo {
-      width: 26px;
-      height: 26px;
       object-fit: contain;
+      display: block;
+      flex: 0 0 auto;
     }
 
     .header-meta {
@@ -492,9 +482,7 @@ function renderDashboardPage() {
   <main>
     <section class="panel">
       <div class="panel-header">
-        <div class="brand-logo-canvas">
-          <img src="/logo.svg" alt="Hora-claw logo" class="brand-logo" />
-        </div>
+        <img src="/logo-round.svg" alt="Hora-claw logo" class="brand-logo" />
         <div>
           <h1>Hora-claw Session Links</h1>
           <div class="header-meta">Live graph of linked chat sessions and runtime status.</div>
@@ -659,20 +647,24 @@ function renderDashboardPage() {
 </html>`;
 }
 
-function renderRoundedFaviconSvg(logoSvgBuffer) {
+function renderRoundedLogoSvg(logoSvgBuffer) {
     const logoBase64 = Buffer.from(logoSvgBuffer).toString('base64');
     return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <defs>
-    <clipPath id="icon-clip">
-      <circle cx="32" cy="32" r="30" />
+    <clipPath id="logo-round-clip">
+      <circle cx="50" cy="50" r="50" />
     </clipPath>
   </defs>
-  <circle cx="32" cy="32" r="31" fill="#0b0f14" />
-  <circle cx="32" cy="32" r="30" fill="#101720" stroke="#273341" stroke-width="1.5" />
-  <g clip-path="url(#icon-clip)">
-    <image href="data:image/svg+xml;base64,${logoBase64}" x="11" y="11" width="42" height="42" preserveAspectRatio="xMidYMid meet" />
-  </g>
+  <image
+    href="data:image/svg+xml;base64,${logoBase64}"
+    x="0"
+    y="0"
+    width="100"
+    height="100"
+    preserveAspectRatio="xMidYMid slice"
+    clip-path="url(#logo-round-clip)"
+  />
 </svg>`;
 }
 
@@ -698,7 +690,7 @@ function handleDashboardRequest(req, res) {
         return;
     }
 
-    if (req.method === 'GET' && pathname === '/favicon.svg') {
+    if (req.method === 'GET' && (pathname === '/logo-round.svg' || pathname === '/favicon.svg')) {
         fs.readFile(LOGO_SVG_FILE, (error, content) => {
             if (error) {
                 res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -706,12 +698,12 @@ function handleDashboardRequest(req, res) {
                 return;
             }
 
-            const faviconSvg = renderRoundedFaviconSvg(content);
+            const roundedLogoSvg = renderRoundedLogoSvg(content);
             res.writeHead(200, {
                 'Content-Type': 'image/svg+xml; charset=utf-8',
                 'Cache-Control': 'public, max-age=86400'
             });
-            res.end(faviconSvg);
+            res.end(roundedLogoSvg);
         });
         return;
     }
