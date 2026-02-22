@@ -1,42 +1,595 @@
 const { Telegraf } = require('telegraf');
 const { exec, execFile } = require('child_process');
 const fs = require('fs');
+const path = require('path');
+const http = require('http');
 require('dotenv').config();
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
-const CHATS_FILE = 'chats.json';
+const CHATS_FILE = path.join(__dirname, 'chats.json');
+const GEMINI_PATH = 'C:\\Users\\Aarsh\\AppData\\Roaming\\npm\\gemini.cmd';
 
-function saveChatId(chatId) {
-    let chats = new Set();
-    if (fs.existsSync(CHATS_FILE)) {
+const DASHBOARD_HOST = process.env.DASHBOARD_HOST || '0.0.0.0';
+const DASHBOARD_PORT = Number(process.env.DASHBOARD_PORT || 8787);
+const ACTIVE_WINDOW_MS = Number(process.env.DASHBOARD_ACTIVE_WINDOW_MS || 10 * 60 * 1000);
+
+const dashboardClients = new Set();
+const sessions = new Map();
+let dashboardServer = null;
+
+const runtimeState = {
+    startedAt: Date.now(),
+    botOnline: false,
+    totalMessages: 0,
+    lastResetAt: null
+};
+
+function readSavedChats() {
+    if (!fs.existsSync(CHATS_FILE)) {
+        return [];
+    }
+
+    try {
+        const content = fs.readFileSync(CHATS_FILE, 'utf8');
+        const parsed = JSON.parse(content);
+        if (!Array.isArray(parsed)) {
+            return [];
+        }
+        return parsed.map(chatId => String(chatId));
+    } catch (error) {
+        console.error('Failed to read chats.json', error);
+        return [];
+    }
+}
+
+const knownChats = new Set(readSavedChats());
+
+function persistKnownChats() {
+    try {
+        fs.writeFileSync(CHATS_FILE, JSON.stringify(Array.from(knownChats), null, 2));
+    } catch (error) {
+        console.error('Failed to write chats.json', error);
+    }
+}
+
+function getSession(chatId) {
+    const key = String(chatId);
+
+    if (!sessions.has(key)) {
+        sessions.set(key, {
+            chatId: key,
+            linkedAt: Date.now(),
+            lastSeenAt: null,
+            lastReplyAt: null,
+            status: 'idle',
+            messageCount: 0,
+            lastError: null
+        });
+    }
+
+    return sessions.get(key);
+}
+
+function hydrateSessionsFromKnownChats() {
+    for (const chatId of knownChats) {
+        getSession(chatId);
+    }
+}
+
+function sendSse(res, event, payload) {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+function buildDashboardSnapshot() {
+    const now = Date.now();
+    const sessionList = Array.from(sessions.values()).map(session => {
+        const isActive = session.status === 'processing'
+            || (session.lastSeenAt !== null && (now - session.lastSeenAt) <= ACTIVE_WINDOW_MS);
+
+        return {
+            chatId: session.chatId,
+            linkedAt: session.linkedAt,
+            lastSeenAt: session.lastSeenAt,
+            lastReplyAt: session.lastReplyAt,
+            status: session.status,
+            messageCount: session.messageCount,
+            lastError: session.lastError,
+            isActive
+        };
+    }).sort((a, b) => {
+        const left = a.lastSeenAt || a.linkedAt || 0;
+        const right = b.lastSeenAt || b.linkedAt || 0;
+        return right - left;
+    });
+
+    return {
+        generatedAt: now,
+        activeWindowMs: ACTIVE_WINDOW_MS,
+        runtimeState,
+        totals: {
+            linked: sessionList.length,
+            active: sessionList.filter(item => item.isActive).length,
+            processing: sessionList.filter(item => item.status === 'processing').length,
+            errors: sessionList.filter(item => item.status === 'error').length
+        },
+        sessions: sessionList
+    };
+}
+
+function broadcastDashboardUpdate(reason) {
+    if (dashboardClients.size === 0) {
+        return;
+    }
+
+    const snapshot = buildDashboardSnapshot();
+    for (const client of dashboardClients) {
         try {
-            chats = new Set(JSON.parse(fs.readFileSync(CHATS_FILE)));
-        } catch (e) {
-            console.error("Failed to read chats.json", e);
+            sendSse(client, 'snapshot', { reason, snapshot });
+        } catch (error) {
+            dashboardClients.delete(client);
         }
     }
-    if (!chats.has(chatId)) {
-        chats.add(chatId);
-        fs.writeFileSync(CHATS_FILE, JSON.stringify(Array.from(chats)));
+}
+
+function renderDashboardPage() {
+    return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hora-claw Dashboard</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #101720;
+      --line: #273341;
+      --text: #d3dde7;
+      --muted: #8da0b3;
+      --accent: #3aa4ff;
+      --good: #23b26d;
+      --warn: #d9a441;
+      --bad: #e05d6f;
     }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "JetBrains Mono", "SFMono-Regular", Consolas, Menlo, monospace;
+    }
+
+    main {
+      max-width: 980px;
+      margin: 24px auto;
+      padding: 20px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 10px;
+      padding: 16px;
+    }
+
+    h1 {
+      margin: 0 0 14px 0;
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    .top {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .metric {
+      min-width: 140px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.01);
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+    }
+
+    .metric .value {
+      font-size: 20px;
+      margin-top: 4px;
+    }
+
+    .status-bar {
+      margin: 8px 0 16px 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 7px;
+      background: var(--warn);
+    }
+
+    .status-dot.ok { background: var(--good); }
+    .status-dot.bad { background: var(--bad); }
+    .status-dot.warn { background: var(--warn); }
+
+    .list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .node {
+      position: relative;
+      margin-left: 10px;
+      padding: 0 0 14px 28px;
+      border-left: 1px solid var(--line);
+    }
+
+    .node:last-child {
+      padding-bottom: 0;
+      border-left-color: transparent;
+    }
+
+    .node::before {
+      content: '';
+      position: absolute;
+      left: -6px;
+      top: 3px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      border: 2px solid var(--accent);
+      background: var(--panel);
+    }
+
+    .node::after {
+      content: '->';
+      position: absolute;
+      left: 10px;
+      top: -1px;
+      color: var(--accent);
+      font-size: 11px;
+    }
+
+    .node.active::before { border-color: var(--good); }
+    .node.status-error::before { border-color: var(--bad); }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .title {
+      font-size: 13px;
+      color: var(--text);
+    }
+
+    .badge {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 11px;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .node.status-processing .badge {
+      color: var(--good);
+      border-color: var(--good);
+    }
+
+    .node.status-error .badge {
+      color: var(--bad);
+      border-color: var(--bad);
+    }
+
+    .node.status-idle .badge {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .meta {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .meta.error {
+      color: var(--bad);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .empty {
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <h1>Hora-claw Session Links</h1>
+      <div class="top">
+        <article class="metric">
+          <div class="label">Linked Sessions</div>
+          <div class="value" id="metric-linked">0</div>
+        </article>
+        <article class="metric">
+          <div class="label">Active Sessions</div>
+          <div class="value" id="metric-active">0</div>
+        </article>
+        <article class="metric">
+          <div class="label">Processing</div>
+          <div class="value" id="metric-processing">0</div>
+        </article>
+        <article class="metric">
+          <div class="label">Errors</div>
+          <div class="value" id="metric-errors">0</div>
+        </article>
+      </div>
+      <div class="status-bar">
+        <span class="status-dot warn" id="stream-dot"></span>
+        stream: <span id="stream-status">connecting</span> |
+        bot: <span id="bot-status">offline</span> |
+        updated: <span id="updated-at">never</span> |
+        active window: <span id="active-window">0m</span>
+      </div>
+      <ul class="list" id="session-list"></ul>
+    </section>
+  </main>
+  <script>
+    (function () {
+      var linkedEl = document.getElementById('metric-linked');
+      var activeEl = document.getElementById('metric-active');
+      var processingEl = document.getElementById('metric-processing');
+      var errorsEl = document.getElementById('metric-errors');
+      var botStatusEl = document.getElementById('bot-status');
+      var updatedAtEl = document.getElementById('updated-at');
+      var activeWindowEl = document.getElementById('active-window');
+      var listEl = document.getElementById('session-list');
+      var streamDotEl = document.getElementById('stream-dot');
+      var streamStatusEl = document.getElementById('stream-status');
+
+      function escapeHtml(value) {
+        return String(value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function formatAge(timestamp) {
+        if (!timestamp) return 'never';
+        var diff = Date.now() - Number(timestamp);
+        if (diff < 1000) return 'now';
+
+        var units = [
+          ['d', 86400000],
+          ['h', 3600000],
+          ['m', 60000],
+          ['s', 1000]
+        ];
+
+        for (var i = 0; i < units.length; i += 1) {
+          var amount = Math.floor(diff / units[i][1]);
+          if (amount >= 1) {
+            return amount + units[i][0] + ' ago';
+          }
+        }
+
+        return 'now';
+      }
+
+      function formatClock(timestamp) {
+        if (!timestamp) return 'never';
+        return new Date(Number(timestamp)).toLocaleString();
+      }
+
+      function setStreamState(label, level) {
+        streamStatusEl.textContent = label;
+        streamDotEl.className = 'status-dot ' + level;
+      }
+
+      function render(snapshot) {
+        linkedEl.textContent = snapshot.totals.linked;
+        activeEl.textContent = snapshot.totals.active;
+        processingEl.textContent = snapshot.totals.processing;
+        errorsEl.textContent = snapshot.totals.errors;
+        botStatusEl.textContent = snapshot.runtimeState.botOnline ? 'online' : 'offline';
+        updatedAtEl.textContent = formatClock(snapshot.generatedAt);
+        activeWindowEl.textContent = Math.round(snapshot.activeWindowMs / 60000) + 'm';
+
+        listEl.innerHTML = '';
+        if (!snapshot.sessions.length) {
+          listEl.innerHTML = '<li class="empty">No linked sessions yet. Send /start to Hora-claw from Telegram.</li>';
+          return;
+        }
+
+        snapshot.sessions.forEach(function (session, index) {
+          var li = document.createElement('li');
+          li.className = 'node status-' + session.status + (session.isActive ? ' active' : '');
+
+          var errorLine = session.lastError
+            ? '<div class="meta error">error: ' + escapeHtml(session.lastError) + '</div>'
+            : '';
+
+          li.innerHTML =
+            '<div class="row">' +
+              '<div class="title">node ' + (index + 1) + ' -> chat ' + escapeHtml(session.chatId) + '</div>' +
+              '<div class="badge">' + escapeHtml(session.status) + '</div>' +
+            '</div>' +
+            '<div class="meta">link: ' + (session.isActive ? 'active' : 'idle') +
+              ' | messages: ' + session.messageCount +
+              ' | last seen: ' + formatAge(session.lastSeenAt) + '</div>' +
+            '<div class="meta">last reply: ' + formatAge(session.lastReplyAt) + '</div>' +
+            errorLine;
+          listEl.appendChild(li);
+        });
+      }
+
+      function connectStream() {
+        var source = new EventSource('/events');
+
+        source.addEventListener('snapshot', function (event) {
+          try {
+            var payload = JSON.parse(event.data);
+            render(payload.snapshot);
+            setStreamState('live', 'ok');
+          } catch (error) {
+            setStreamState('data error', 'bad');
+          }
+        });
+
+        source.onopen = function () {
+          setStreamState('live', 'ok');
+        };
+
+        source.onerror = function () {
+          setStreamState('reconnecting', 'warn');
+        };
+      }
+
+      fetch('/api/state')
+        .then(function (response) { return response.json(); })
+        .then(function (snapshot) { render(snapshot); })
+        .catch(function () { setStreamState('no initial data', 'bad'); });
+
+      connectStream();
+    })();
+  </script>
+</body>
+</html>`;
+}
+
+function handleDashboardRequest(req, res) {
+    const host = req.headers.host || `localhost:${DASHBOARD_PORT}`;
+    const requestUrl = new URL(req.url || '/', `http://${host}`);
+    const pathname = requestUrl.pathname;
+
+    if (req.method === 'GET' && (pathname === '/' || pathname === '/dashboard')) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(renderDashboardPage());
+        return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/state') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(buildDashboardSnapshot()));
+        return;
+    }
+
+    if (req.method === 'GET' && pathname === '/events') {
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'Cache-Control': 'no-cache, no-transform',
+            Connection: 'keep-alive',
+            'Access-Control-Allow-Origin': '*'
+        });
+
+        res.write('retry: 3000\n\n');
+        dashboardClients.add(res);
+        sendSse(res, 'snapshot', { reason: 'initial', snapshot: buildDashboardSnapshot() });
+
+        req.on('close', () => {
+            dashboardClients.delete(res);
+        });
+        return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Not found');
+}
+
+function startDashboardServer() {
+    if (dashboardServer) {
+        return;
+    }
+
+    dashboardServer = http.createServer(handleDashboardRequest);
+    dashboardServer.on('error', (error) => {
+        console.error('Dashboard server error:', error);
+    });
+
+    dashboardServer.listen(DASHBOARD_PORT, DASHBOARD_HOST, () => {
+        console.log(`Dashboard is live at http://localhost:${DASHBOARD_PORT}/dashboard`);
+    });
+}
+
+async function stopDashboardServer() {
+    if (!dashboardServer) {
+        return;
+    }
+
+    for (const client of dashboardClients) {
+        try {
+            client.end();
+        } catch (error) {
+            console.error('Failed to close dashboard client:', error);
+        }
+    }
+    dashboardClients.clear();
+
+    await new Promise(resolve => {
+        dashboardServer.close(() => resolve());
+    });
+
+    dashboardServer = null;
+}
+
+function saveChatId(chatId) {
+    const key = String(chatId);
+    getSession(key);
+
+    if (!knownChats.has(key)) {
+        knownChats.add(key);
+        persistKnownChats();
+    }
+
+    broadcastDashboardUpdate('session-linked');
+}
+
+function markSessionSeen(chatId) {
+    const session = getSession(chatId);
+    session.lastSeenAt = Date.now();
+    session.lastError = null;
+}
+
+function setSessionStatus(chatId, status, extra = {}) {
+    const session = getSession(chatId);
+    session.status = status;
+    Object.assign(session, extra);
+    broadcastDashboardUpdate('session-status');
 }
 
 async function broadcastStatus(message) {
-    if (fs.existsSync(CHATS_FILE)) {
-        try {
-            const chats = JSON.parse(fs.readFileSync(CHATS_FILE));
-            for (const chatId of chats) {
-                await bot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' }).catch(err => {
-                    console.error(`Failed to send to ${chatId}:`, err);
-                });
-            }
-        } catch (e) {
-            console.error("Failed to broadcast", e);
-        }
+    for (const chatId of knownChats) {
+        await bot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' }).catch(error => {
+            console.error(`Failed to send to ${chatId}:`, error);
+        });
     }
 }
-
-const GEMINI_PATH = 'C:\\Users\\Aarsh\\AppData\\Roaming\\npm\\gemini.cmd';
 
 function isMissingSessionError(output = '') {
     const text = output.toLowerCase();
@@ -51,10 +604,8 @@ function isMissingSessionError(output = '') {
 
 function runGemini(prompt, useResume = true) {
     return new Promise((resolve, reject) => {
-        // Inject persona context
         const personaPrefix = "[System Context: You are a human-like claw named Hora-claw, serving the user via Telegram. You can do stuff. Never use the word 'agent', or refer to yourself as Gemini, a project, or a CLI. You are the claw itself.]\\n\\n";
         const fullPrompt = personaPrefix + prompt;
-        // Escape quotes for Windows shell
         const escapedPrompt = fullPrompt.replace(/"/g, '""');
         let command = `"${GEMINI_PATH}" -p "${escapedPrompt}" --yolo`;
         if (useResume) {
@@ -66,13 +617,13 @@ function runGemini(prompt, useResume = true) {
         exec(command, (error, stdout, stderr) => {
             if (error) {
                 console.log(`Gemini process finished with error code ${error.code}`);
-                // If it's the first time and there's no "latest" session, try without resume
-                if (useResume && (stderr.toLowerCase().includes('failed to resume') || stderr.toLowerCase().includes('not found'))) {
+                const stderrText = (stderr || '').toLowerCase();
+                if (useResume && (stderrText.includes('failed to resume') || stderrText.includes('not found'))) {
                     console.log('Falling back to new session (no resume found)');
                     return runGemini(prompt, false).then(resolve).catch(reject);
                 }
                 console.error(`Gemini Error: ${stderr}`);
-                if (stdout.trim()) {
+                if (stdout && stdout.trim()) {
                     return resolve(stdout);
                 }
                 return reject(new Error(stderr || error.message));
@@ -82,25 +633,39 @@ function runGemini(prompt, useResume = true) {
     });
 }
 
+hydrateSessionsFromKnownChats();
+const snapshotTimer = setInterval(() => broadcastDashboardUpdate('heartbeat'), 5000);
+snapshotTimer.unref();
+
 bot.start((ctx) => {
     saveChatId(ctx.chat.id);
+    markSessionSeen(ctx.chat.id);
+    setSessionStatus(ctx.chat.id, 'idle');
     ctx.reply('Welcome! I am Hora-claw. How can I help you today?');
 });
 
 bot.command('reset', async (ctx) => {
+    const chatId = String(ctx.chat.id);
+    saveChatId(chatId);
+    markSessionSeen(chatId);
+    setSessionStatus(chatId, 'processing');
+
     ctx.reply('Resetting my memory and starting a fresh session... 🧹');
 
     execFile(GEMINI_PATH, ['--delete-session', 'latest'], (error, stdout, stderr) => {
         const cliOutput = `${stdout || ''}\n${stderr || ''}`.trim();
+        runtimeState.lastResetAt = Date.now();
 
         if (error && !isMissingSessionError(cliOutput)) {
             console.error('Error deleting session:', error, cliOutput);
+            setSessionStatus(chatId, 'error', { lastSeenAt: Date.now(), lastError: cliOutput || error.message });
             ctx.reply('I could not clear memory right now. Please try /reset again.');
             return;
         }
 
         if (error && isMissingSessionError(cliOutput)) {
             console.log('No existing latest session found; starting fresh.');
+            setSessionStatus(chatId, 'idle', { lastSeenAt: Date.now(), lastError: null });
             ctx.reply('No previous memory was found. I am ready for a new task as Hora-claw.');
             return;
         }
@@ -108,14 +673,24 @@ bot.command('reset', async (ctx) => {
         if (stderr && stderr.trim()) {
             console.warn('Gemini delete-session warning:', stderr.trim());
         }
+
+        setSessionStatus(chatId, 'idle', { lastSeenAt: Date.now(), lastError: null });
         ctx.reply('Memory cleared! I am ready for a new task as Hora-claw.');
     });
 });
 
 bot.on('text', async (ctx) => {
     const userMessage = ctx.message.text;
+    const chatId = String(ctx.chat.id);
+
     console.log(`Received message: ${userMessage}`);
-    saveChatId(ctx.chat.id);
+    saveChatId(chatId);
+    markSessionSeen(chatId);
+
+    const session = getSession(chatId);
+    session.messageCount += 1;
+    runtimeState.totalMessages += 1;
+    setSessionStatus(chatId, 'processing', { lastSeenAt: Date.now(), lastError: null });
 
     let typingInterval = setInterval(() => {
         ctx.sendChatAction('typing').catch(() => { });
@@ -132,16 +707,13 @@ bot.on('text', async (ctx) => {
             output = "I'm sorry, I couldn't generate a response.";
         }
 
-        // Parse Markdown to HTML for Telegram
         const striptags = require('striptags');
         const { marked } = require('marked');
         let htmlOutput = marked.parse(output, { breaks: true });
 
-        // replace paragraph and br tags with newlines to preserve spacing
         htmlOutput = htmlOutput.replace(/<\/p>/g, '\n');
         htmlOutput = htmlOutput.replace(/<br\s*\/?>/g, '\n');
 
-        // telegram uses a subset of HTML: b, strong, i, em, u, ins, s, strike, del, a, code, pre
         const allowedTags = ['b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del', 'a', 'code', 'pre'];
         htmlOutput = striptags(htmlOutput, allowedTags).trim();
 
@@ -149,24 +721,37 @@ bot.on('text', async (ctx) => {
             for (let i = 0; i < htmlOutput.length; i += 4000) {
                 await ctx.replyWithHTML(htmlOutput.substring(i, i + 4000)).catch(err => {
                     console.error('Telegram replyWithHTML error:', err);
-                    ctx.reply(output.substring(i, i + 4000)); // Fallback
+                    ctx.reply(output.substring(i, i + 4000));
                 });
             }
         } else {
             await ctx.replyWithHTML(htmlOutput).catch(err => {
                 console.error('Telegram replyWithHTML error:', err);
-                ctx.reply(output); // Fallback
+                ctx.reply(output);
             });
         }
 
+        setSessionStatus(chatId, 'idle', {
+            lastSeenAt: Date.now(),
+            lastReplyAt: Date.now(),
+            lastError: null
+        });
     } catch (error) {
         clearInterval(typingInterval);
         console.error('Gemini Execution Error:', error);
+        setSessionStatus(chatId, 'error', {
+            lastSeenAt: Date.now(),
+            lastError: error.message
+        });
         ctx.reply('An error occurred. Gemini said: ' + error.message.substring(0, 150));
     }
 });
 
 bot.launch().then(async () => {
+    runtimeState.botOnline = true;
+    startDashboardServer();
+    broadcastDashboardUpdate('bot-online');
+
     console.log('hora-claw is running on Telegram!');
     await broadcastStatus('🟢 *Hora-claw is online!* I am ready to assist you.');
 }).catch(err => {
@@ -175,7 +760,11 @@ bot.launch().then(async () => {
 
 const gracefulShutdown = async (signal) => {
     console.log(`Received ${signal}, shutting down...`);
+
+    runtimeState.botOnline = false;
+    broadcastDashboardUpdate('bot-offline');
     await broadcastStatus('🔴 *Hora-claw is going offline!* I will be back shortly.');
+    await stopDashboardServer();
     bot.stop(signal);
     process.exit(0);
 };
