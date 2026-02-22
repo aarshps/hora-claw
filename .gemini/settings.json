@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/google-gemini/gemini-cli/main/schemas/settings.schema.json",
   "tools": {
     "sandbox": true,
     "core": [
@@ -12,6 +13,9 @@
       "save_memory",
       "google_web_search",
       "web_fetch",
+      "run_shell_command"
+    ],
+    "allowed": [
       "run_shell_command(node ./scripts/hora_tool_runner.js)",
       "run_shell_command(node scripts/hora_tool_runner.js)",
       "run_shell_command(node .\\\\scripts\\\\hora_tool_runner.js)",

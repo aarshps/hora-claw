@@ -1,9 +1,9 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "highlights": [
-    "Added versioned online and offline status announcements so users always see the running Hora-claw version.",
-    "Added quick release-note callouts on startup online messages, delivered once per chat for each new version.",
-    "Enabled controlled internet browsing plus secure API and temporary script execution with automatic cleanup.",
-    "Improved release tracking with persisted per-chat version announcement records."
+    "Fixed headless Gemini response handling to prevent YOLO/CLI warnings from breaking chat replies.",
+    "Switched to per-chat Gemini session IDs so each Telegram user now has isolated memory and no cross-user session sharing.",
+    "Updated /reset to clear only that chat's own session safely and consistently.",
+    "Kept versioned online/offline announcements and startup release notes active for the new version."
   ]
 }
