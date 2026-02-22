@@ -1,11 +1,25 @@
 const { Telegraf } = require('telegraf');
-const { exec, execFile } = require('child_process');
+const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
 require('dotenv').config();
 
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+function parsePositiveNumber(value, fallback) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return fallback;
+    }
+    return parsed;
+}
+
+const TELEGRAM_HANDLER_TIMEOUT_MS = parsePositiveNumber(process.env.TELEGRAM_HANDLER_TIMEOUT_MS, 30 * 60 * 1000);
+const GEMINI_EXEC_TIMEOUT_MS = parsePositiveNumber(process.env.GEMINI_EXEC_TIMEOUT_MS, 20 * 60 * 1000);
+const GEMINI_EXEC_MAX_BUFFER_BYTES = parsePositiveNumber(process.env.GEMINI_EXEC_MAX_BUFFER_BYTES, 10 * 1024 * 1024);
+
+const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
+    handlerTimeout: TELEGRAM_HANDLER_TIMEOUT_MS
+});
 const CHATS_FILE = path.join(__dirname, 'chats.json');
 const GEMINI_PATH = 'C:\\Users\\Aarsh\\AppData\\Roaming\\npm\\gemini.cmd';
 
@@ -616,6 +630,14 @@ function isCommandText(text = '') {
     return /^\/[a-z0-9_]+(?:@[a-z0-9_]+)?/i.test(String(text).trim());
 }
 
+function runGeminiCliCommand(command, callback) {
+    exec(command, {
+        windowsHide: true,
+        timeout: GEMINI_EXEC_TIMEOUT_MS,
+        maxBuffer: GEMINI_EXEC_MAX_BUFFER_BYTES
+    }, callback);
+}
+
 function runGemini(prompt, useResume = true) {
     return new Promise((resolve, reject) => {
         const personaPrefix = "[System Context: You are a human-like claw named Hora-claw, serving the user via Telegram. You can do stuff. Never use the word 'agent', or refer to yourself as Gemini, a project, or a CLI. You are the claw itself.]\\n\\n";
@@ -628,7 +650,7 @@ function runGemini(prompt, useResume = true) {
 
         console.log(`Executing: ${command}`);
 
-        exec(command, (error, stdout, stderr) => {
+        runGeminiCliCommand(command, (error, stdout, stderr) => {
             if (error) {
                 console.log(`Gemini process finished with error code ${error.code}`);
                 const stderrText = (stderr || '').toLowerCase();
@@ -667,7 +689,8 @@ bot.command('reset', async (ctx) => {
     safeReply(ctx, 'Resetting my memory and starting a fresh session... 🧹');
 
     try {
-        execFile(GEMINI_PATH, ['--delete-session', 'latest'], (error, stdout, stderr) => {
+        const resetCommand = `"${GEMINI_PATH}" --delete-session latest`;
+        runGeminiCliCommand(resetCommand, (error, stdout, stderr) => {
             try {
                 const cliOutput = `${stdout || ''}\n${stderr || ''}`.trim();
                 runtimeState.lastResetAt = Date.now();
@@ -750,13 +773,13 @@ bot.on('text', async (ctx) => {
             for (let i = 0; i < htmlOutput.length; i += 4000) {
                 await ctx.replyWithHTML(htmlOutput.substring(i, i + 4000)).catch(err => {
                     console.error('Telegram replyWithHTML error:', err);
-                    ctx.reply(output.substring(i, i + 4000));
+                    return safeReply(ctx, output.substring(i, i + 4000));
                 });
             }
         } else {
             await ctx.replyWithHTML(htmlOutput).catch(err => {
                 console.error('Telegram replyWithHTML error:', err);
-                ctx.reply(output);
+                return safeReply(ctx, output);
             });
         }
 
@@ -772,7 +795,7 @@ bot.on('text', async (ctx) => {
             lastSeenAt: Date.now(),
             lastError: error.message
         });
-        ctx.reply('An error occurred. Gemini said: ' + error.message.substring(0, 150));
+        safeReply(ctx, 'An error occurred. Gemini said: ' + error.message.substring(0, 150));
     }
 });
 
