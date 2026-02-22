@@ -27,6 +27,7 @@ const LEGACY_CHATS_FILES = Array.from(new Set([
     path.join(__dirname, 'chats.json'),
     path.resolve(process.cwd(), 'chats.json')
 ])).filter(filePath => filePath !== CHATS_FILE);
+const LOGO_SVG_FILE = path.join(__dirname, 'logo.svg');
 const GEMINI_PATH = 'C:\\Users\\Aarsh\\AppData\\Roaming\\npm\\gemini.cmd';
 
 const DASHBOARD_HOST = process.env.DASHBOARD_HOST || '0.0.0.0';
@@ -268,6 +269,7 @@ function renderDashboardPage() {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Hora-claw Dashboard</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <style>
     :root {
       --bg: #0b0f14;
@@ -305,9 +307,33 @@ function renderDashboardPage() {
     }
 
     h1 {
-      margin: 0 0 14px 0;
+      margin: 0;
       font-size: 20px;
       font-weight: 600;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .brand-logo {
+      width: 30px;
+      height: 30px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.02);
+      padding: 3px;
+      object-fit: contain;
+      flex: 0 0 auto;
+    }
+
+    .header-meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
     }
 
     .top {
@@ -458,7 +484,13 @@ function renderDashboardPage() {
 <body>
   <main>
     <section class="panel">
-      <h1>Hora-claw Session Links</h1>
+      <div class="panel-header">
+        <img src="/logo.svg" alt="Hora-claw logo" class="brand-logo" />
+        <div>
+          <h1>Hora-claw Session Links</h1>
+          <div class="header-meta">Live graph of linked chat sessions and runtime status.</div>
+        </div>
+      </div>
       <div class="top">
         <article class="metric">
           <div class="label">Linked Sessions</div>
@@ -622,6 +654,23 @@ function handleDashboardRequest(req, res) {
     const host = req.headers.host || `localhost:${dashboardPortInUse}`;
     const requestUrl = new URL(req.url || '/', `http://${host}`);
     const pathname = requestUrl.pathname;
+
+    if (req.method === 'GET' && (pathname === '/logo.svg' || pathname === '/favicon.svg')) {
+        fs.readFile(LOGO_SVG_FILE, (error, content) => {
+            if (error) {
+                res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+                res.end('logo.svg not found');
+                return;
+            }
+
+            res.writeHead(200, {
+                'Content-Type': 'image/svg+xml; charset=utf-8',
+                'Cache-Control': 'public, max-age=86400'
+            });
+            res.end(content);
+        });
+        return;
+    }
 
     if (req.method === 'GET' && (pathname === '/' || pathname === '/dashboard')) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
