@@ -1,6 +1,7 @@
 const { Telegraf } = require('telegraf');
 const { exec } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const http = require('http');
 require('dotenv').config();
@@ -20,8 +21,12 @@ const GEMINI_EXEC_MAX_BUFFER_BYTES = parsePositiveNumber(process.env.GEMINI_EXEC
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
     handlerTimeout: TELEGRAM_HANDLER_TIMEOUT_MS
 });
-const CHATS_FILE = path.join(__dirname, 'chats.json');
-const LEGACY_CHATS_FILE = path.resolve(process.cwd(), 'chats.json');
+const DATA_DIR = process.env.HORA_DATA_DIR || path.join(os.homedir(), '.hora-claw');
+const CHATS_FILE = path.join(DATA_DIR, 'chats.json');
+const LEGACY_CHATS_FILES = Array.from(new Set([
+    path.join(__dirname, 'chats.json'),
+    path.resolve(process.cwd(), 'chats.json')
+])).filter(filePath => filePath !== CHATS_FILE);
 const GEMINI_PATH = 'C:\\Users\\Aarsh\\AppData\\Roaming\\npm\\gemini.cmd';
 
 const DASHBOARD_HOST = process.env.DASHBOARD_HOST || '0.0.0.0';
@@ -49,11 +54,38 @@ const runtimeState = {
     lastOnlineBroadcastAt: null
 };
 
-function readSavedChats() {
-    const filesToRead = [CHATS_FILE];
-    if (LEGACY_CHATS_FILE !== CHATS_FILE) {
-        filesToRead.push(LEGACY_CHATS_FILE);
+function ensureDataDir() {
+    try {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+    } catch (error) {
+        console.error(`Failed to prepare data directory ${DATA_DIR}:`, error);
     }
+}
+
+function parseChatIdsFromRawContent(content, sourcePath) {
+    try {
+        const parsed = JSON.parse(content);
+        if (!Array.isArray(parsed)) {
+            return [];
+        }
+
+        return parsed
+            .map(item => String(item).trim())
+            .filter(Boolean);
+    } catch (jsonError) {
+        // Recover from partial/corrupted writes by extracting numeric IDs from raw text.
+        const recovered = Array.from(new Set((content.match(/-?\d{6,}/g) || []).map(value => value.trim())));
+        if (recovered.length > 0) {
+            console.warn(`Recovered ${recovered.length} chat id(s) from non-JSON data in ${sourcePath}.`);
+        } else {
+            console.error(`Failed to parse chat IDs from ${sourcePath}:`, jsonError.message);
+        }
+        return recovered;
+    }
+}
+
+function readSavedChats() {
+    const filesToRead = [CHATS_FILE, ...LEGACY_CHATS_FILES];
 
     const mergedChatIds = new Set();
     for (const filePath of filesToRead) {
@@ -63,11 +95,8 @@ function readSavedChats() {
 
         try {
             const content = fs.readFileSync(filePath, 'utf8');
-            const parsed = JSON.parse(content);
-            if (!Array.isArray(parsed)) {
-                continue;
-            }
-            for (const chatId of parsed) {
+            const parsedChatIds = parseChatIdsFromRawContent(content, filePath);
+            for (const chatId of parsedChatIds) {
                 mergedChatIds.add(String(chatId));
             }
         } catch (error) {
@@ -78,21 +107,39 @@ function readSavedChats() {
     return Array.from(mergedChatIds);
 }
 
+ensureDataDir();
 const knownChats = new Set(readSavedChats());
-console.log(`Loaded ${knownChats.size} known chat(s) for status broadcasts.`);
+console.log(`Loaded ${knownChats.size} known chat(s) for status broadcasts from ${CHATS_FILE}.`);
+
+function writeFileAtomic(filePath, content) {
+    const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tempPath, content);
+    try {
+        fs.renameSync(tempPath, filePath);
+    } catch (renameError) {
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+            fs.renameSync(tempPath, filePath);
+            return;
+        }
+
+        throw renameError;
+    }
+}
 
 function persistKnownChats() {
     const serialized = JSON.stringify(Array.from(knownChats), null, 2);
     const filesToWrite = [CHATS_FILE];
-
-    if (LEGACY_CHATS_FILE !== CHATS_FILE && fs.existsSync(LEGACY_CHATS_FILE)) {
-        filesToWrite.push(LEGACY_CHATS_FILE);
+    for (const legacyFile of LEGACY_CHATS_FILES) {
+        if (fs.existsSync(legacyFile)) {
+            filesToWrite.push(legacyFile);
+        }
     }
 
     for (const filePath of filesToWrite) {
         try {
             fs.mkdirSync(path.dirname(filePath), { recursive: true });
-            fs.writeFileSync(filePath, serialized);
+            writeFileAtomic(filePath, serialized);
         } catch (error) {
             console.error(`Failed to write chat IDs to ${filePath}`, error);
         }
@@ -180,7 +227,8 @@ function buildDashboardSnapshot() {
             linked: sessionList.length,
             active: sessionList.filter(item => item.isActive).length,
             processing: sessionList.filter(item => item.status === 'processing').length,
-            errors: sessionList.filter(item => item.status === 'error').length
+            errors: sessionList.filter(item => item.status === 'error').length,
+            onlinePending: pendingOnlineStatusChats.size
         },
         sessions: sessionList
     };
@@ -416,6 +464,10 @@ function renderDashboardPage() {
           <div class="label">Errors</div>
           <div class="value" id="metric-errors">0</div>
         </article>
+        <article class="metric">
+          <div class="label">Online Pending</div>
+          <div class="value" id="metric-online-pending">0</div>
+        </article>
       </div>
       <div class="status-bar">
         <span class="status-dot warn" id="stream-dot"></span>
@@ -433,6 +485,7 @@ function renderDashboardPage() {
       var activeEl = document.getElementById('metric-active');
       var processingEl = document.getElementById('metric-processing');
       var errorsEl = document.getElementById('metric-errors');
+      var onlinePendingEl = document.getElementById('metric-online-pending');
       var botStatusEl = document.getElementById('bot-status');
       var updatedAtEl = document.getElementById('updated-at');
       var activeWindowEl = document.getElementById('active-window');
@@ -486,6 +539,7 @@ function renderDashboardPage() {
         activeEl.textContent = snapshot.totals.active;
         processingEl.textContent = snapshot.totals.processing;
         errorsEl.textContent = snapshot.totals.errors;
+        onlinePendingEl.textContent = snapshot.totals.onlinePending;
         botStatusEl.textContent = snapshot.runtimeState.botOnline ? 'online' : 'offline';
         updatedAtEl.textContent = formatClock(snapshot.generatedAt);
         activeWindowEl.textContent = Math.round(snapshot.activeWindowMs / 60000) + 'm';
@@ -674,13 +728,35 @@ function getTelegramErrorText(error) {
     );
 }
 
+function getRetryAfterSeconds(error) {
+    const retryAfter = error?.response?.parameters?.retry_after;
+    if (!Number.isFinite(Number(retryAfter))) {
+        return null;
+    }
+    return Number(retryAfter);
+}
+
 async function sendStatusMessageToChat(chatId, message, options = {}) {
-    const parseMode = options.parseMode || 'Markdown';
+    const parseMode = options.parseMode || null;
 
     try {
-        await bot.telegram.sendMessage(chatId, message, { parse_mode: parseMode });
+        const params = parseMode ? { parse_mode: parseMode } : {};
+        await bot.telegram.sendMessage(chatId, message, params);
         return { ok: true, parseMode };
     } catch (error) {
+        const retryAfterSeconds = getRetryAfterSeconds(error);
+        if (retryAfterSeconds !== null && retryAfterSeconds >= 0) {
+            const delayMs = (retryAfterSeconds + 1) * 1000;
+            await sleep(delayMs);
+            try {
+                const params = parseMode ? { parse_mode: parseMode } : {};
+                await bot.telegram.sendMessage(chatId, message, params);
+                return { ok: true, parseMode, retried: true };
+            } catch (retryError) {
+                return { ok: false, error: retryError };
+            }
+        }
+
         const errorText = getTelegramErrorText(error).toLowerCase();
         const isMarkdownParsingError = errorText.includes("can't parse entities") || errorText.includes('parse entities');
         if (isMarkdownParsingError && parseMode) {
@@ -1064,6 +1140,12 @@ bot.launch().then(async () => {
     }
 
     console.log('hora-claw is running on Telegram!');
+    try {
+        await bot.telegram.getMe();
+    } catch (error) {
+        console.warn('[online] Telegram API warmup check failed before startup broadcast:', error.message || error);
+    }
+
     const onlineStatusResult = await flushPendingOnlineStatus('online-startup');
     console.log(`Online status delivery: sent ${onlineStatusResult.sent}/${onlineStatusResult.total}, failed ${onlineStatusResult.failed}, pending ${onlineStatusResult.pending}`);
     if (onlineStatusResult.total === 0) {
