@@ -4,10 +4,34 @@ description: Architectural rules for the SSE Realtime Dashboard
 
 # Local SSE Dashboard
 
-Hora-claw runs a local HTTP server that streams session activities to a dashboard interface via Server-Sent Events (SSE).
+Hora-claw exposes a built-in dashboard over HTTP + SSE.
 
-## Key Patterns
-1. **State Snapshots**: The standard update mechanism is `buildDashboardSnapshot()`. It aggregates the global `runtimeState` and active `sessions` map into a JSON object.
-2. **Dashboard Clients**: Hold open HTTP responses in a global `dashboardClients` Set. Every time a chat updates its status or a heartbeat fires (e.g., every 5s), iterate through the set and `res.write` the chunk. Remove clients that throw error or fire `'close'`.
-3. **Active Windows**: Differentiate between "Linked" sessions (known to the bot) and "Active" sessions (seen within `ACTIVE_WINDOW_MS` threshold, default 10m).
-4. **Graceful Shutdown**: Always terminate the Dashboard HTTP server cleanly during `SIGINT`/`SIGTERM`. Iterate over `dashboardClients` and explicitly `.end()` them before calling `dashboardServer.close()`. This prevents Node from hanging.
+## Endpoints and Contract
+
+1. `GET /dashboard` (and `/`) serves the HTML dashboard.
+2. `GET /api/state` returns current runtime snapshot.
+3. `GET /events` streams snapshot updates via Server-Sent Events.
+4. `GET /healthz` returns minimal readiness and port status.
+
+## Startup and Reachability Rules
+
+1. Start dashboard server independently of `bot.launch()`; dashboard must not depend on bot startup success.
+2. Port selection order:
+3. `DASHBOARD_PORT` -> `PORT` -> `8787`.
+4. Support public URL override with `DASHBOARD_PUBLIC_BASE_URL`.
+5. Log effective URL after successful bind.
+6. On bind failures (`EADDRINUSE`, `EACCES`), try fallback candidates before giving up.
+
+## Snapshot and Streaming
+
+1. Snapshot source is `buildDashboardSnapshot()`.
+2. Include runtime state, per-session state, and delivery metrics (`onlinePending`).
+3. Keep open SSE responses in `dashboardClients`.
+4. On client error/close, remove from set immediately.
+5. Broadcast on state changes plus heartbeat interval.
+
+## Shutdown Rules
+
+1. On shutdown, end all SSE clients before closing server.
+2. Reset dashboard readiness flags after close.
+3. Keep cleanup idempotent; repeated stop calls should be safe.

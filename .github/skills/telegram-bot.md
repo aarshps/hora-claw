@@ -4,11 +4,28 @@ description: Patterns for handling Telegram Bot interactions safely and avoiding
 
 # Telegram Bot Patterns
 
-## Timeouts & Safe Replies
-The Telegraf API handles requests. Be cautious of timeout windows (`TELEGRAM_HANDLER_TIMEOUT_MS`). 
+## Request and Timeout Safety
 
-1. **Safe Replies**: When executing long-running Agent commands (e.g., Gemini CLI), always wrap `ctx.reply` in a `catch` block to prevent the bot from crashing if the connection expires or the user blocks the bot. Use a `safeReply` wrapper.
-2. **Chunking**: Telegram has a 4096 character limit. When sending long Agent responses, convert them to HTML and slice them into chunks of ~4000 characters.
-3. **HTML Formatting**: `marked` parses markdown to HTML. Strip unsupported tags with `striptags`, allowing only `['b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del', 'a', 'code', 'pre']`.
-4. **Typing Indicator**: Run `ctx.sendChatAction('typing')` in a `setInterval` (e.g., every 4s) while waiting for long background tasks to prevent Telegram from dropping the typing status. Always `clearInterval` in both `try` and `catch` blocks.
-5. **Graceful Degradation**: If markdown parsing fails (error `can't parse entities`), fallback to sending raw text without the `parse_mode` parameter.
+1. Configure Telegraf with explicit `handlerTimeout` (env: `TELEGRAM_HANDLER_TIMEOUT_MS`) for long CLI operations.
+2. Add global `bot.catch(...)` to capture middleware exceptions and keep process alive.
+3. Use `safeReply(...)` wrapper for all non-trivial replies and fallback paths.
+4. Never leave promise-returning reply calls unhandled inside catch branches.
+
+## Command Routing Rules
+
+1. Prevent command text from entering generic text pipeline:
+2. Guard `bot.on('text')` with command detection (`/^\/.../`) and early return.
+3. Keep command handlers (`/reset`, `/dashboard`) isolated from Gemini prompt execution flow.
+
+## Response Formatting Rules
+
+1. Convert markdown to HTML with `marked`.
+2. Strip unsupported tags using `striptags`; allow only Telegram-safe subset.
+3. Chunk long outbound messages at about 4000 characters (Telegram hard limit is 4096).
+4. On `replyWithHTML` failures, fallback to plain text via `safeReply(...)`.
+
+## Long-Running Interaction UX
+
+1. While Gemini runs, send `typing` action on interval (~4s).
+2. Always clear typing interval in both success and error paths.
+3. On CLI failure, update session error state and send a bounded error summary to user.
