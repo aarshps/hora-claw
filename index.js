@@ -21,6 +21,7 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
     handlerTimeout: TELEGRAM_HANDLER_TIMEOUT_MS
 });
 const CHATS_FILE = path.join(__dirname, 'chats.json');
+const LEGACY_CHATS_FILE = path.resolve(process.cwd(), 'chats.json');
 const GEMINI_PATH = 'C:\\Users\\Aarsh\\AppData\\Roaming\\npm\\gemini.cmd';
 
 const DASHBOARD_HOST = process.env.DASHBOARD_HOST || '0.0.0.0';
@@ -39,31 +40,57 @@ const runtimeState = {
 };
 
 function readSavedChats() {
-    if (!fs.existsSync(CHATS_FILE)) {
-        return [];
+    const filesToRead = [CHATS_FILE];
+    if (LEGACY_CHATS_FILE !== CHATS_FILE) {
+        filesToRead.push(LEGACY_CHATS_FILE);
     }
 
-    try {
-        const content = fs.readFileSync(CHATS_FILE, 'utf8');
-        const parsed = JSON.parse(content);
-        if (!Array.isArray(parsed)) {
-            return [];
+    const mergedChatIds = new Set();
+    for (const filePath of filesToRead) {
+        if (!fs.existsSync(filePath)) {
+            continue;
         }
-        return parsed.map(chatId => String(chatId));
-    } catch (error) {
-        console.error('Failed to read chats.json', error);
-        return [];
+
+        try {
+            const content = fs.readFileSync(filePath, 'utf8');
+            const parsed = JSON.parse(content);
+            if (!Array.isArray(parsed)) {
+                continue;
+            }
+            for (const chatId of parsed) {
+                mergedChatIds.add(String(chatId));
+            }
+        } catch (error) {
+            console.error(`Failed to read chat IDs from ${filePath}`, error);
+        }
     }
+
+    return Array.from(mergedChatIds);
 }
 
 const knownChats = new Set(readSavedChats());
+console.log(`Loaded ${knownChats.size} known chat(s) for status broadcasts.`);
 
 function persistKnownChats() {
-    try {
-        fs.writeFileSync(CHATS_FILE, JSON.stringify(Array.from(knownChats), null, 2));
-    } catch (error) {
-        console.error('Failed to write chats.json', error);
+    const serialized = JSON.stringify(Array.from(knownChats), null, 2);
+    const filesToWrite = [CHATS_FILE];
+
+    if (LEGACY_CHATS_FILE !== CHATS_FILE && fs.existsSync(LEGACY_CHATS_FILE)) {
+        filesToWrite.push(LEGACY_CHATS_FILE);
     }
+
+    for (const filePath of filesToWrite) {
+        try {
+            fs.mkdirSync(path.dirname(filePath), { recursive: true });
+            fs.writeFileSync(filePath, serialized);
+        } catch (error) {
+            console.error(`Failed to write chat IDs to ${filePath}`, error);
+        }
+    }
+}
+
+if (knownChats.size > 0) {
+    persistKnownChats();
 }
 
 function getSession(chatId) {
@@ -600,12 +627,43 @@ function setSessionStatus(chatId, status, extra = {}) {
     broadcastDashboardUpdate('session-status');
 }
 
-async function broadcastStatus(message) {
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function sendStatusUpdateOnce(message) {
+    let sent = 0;
+    let failed = 0;
+
     for (const chatId of knownChats) {
-        await bot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' }).catch(error => {
+        await bot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' }).then(() => {
+            sent += 1;
+        }).catch(error => {
+            failed += 1;
             console.error(`Failed to send to ${chatId}:`, error);
         });
     }
+
+    return { sent, failed, total: knownChats.size };
+}
+
+async function broadcastStatus(message, options = {}) {
+    const attempts = Math.max(1, Math.floor(parsePositiveNumber(options.attempts, 1)));
+    const retryDelayMs = parsePositiveNumber(options.retryDelayMs, 2500);
+    const label = options.label || 'status';
+
+    let result = { sent: 0, failed: 0, total: knownChats.size };
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        result = await sendStatusUpdateOnce(message);
+        if (result.total === 0 || result.sent > 0 || attempt === attempts) {
+            return result;
+        }
+
+        console.warn(`[${label}] No recipients acknowledged on attempt ${attempt}/${attempts}; retrying in ${retryDelayMs}ms.`);
+        await sleep(retryDelayMs);
+    }
+
+    return result;
 }
 
 function isMissingSessionError(output = '') {
@@ -817,7 +875,12 @@ bot.launch().then(async () => {
     broadcastDashboardUpdate('bot-online');
 
     console.log('hora-claw is running on Telegram!');
-    await broadcastStatus('🟢 *Hora-claw is online!* I am ready to assist you.');
+    const onlineStatusResult = await broadcastStatus('🟢 *Hora-claw is online!* I am ready to assist you.', {
+        attempts: 3,
+        retryDelayMs: 3000,
+        label: 'online'
+    });
+    console.log(`Online status delivery: sent ${onlineStatusResult.sent}/${onlineStatusResult.total}, failed ${onlineStatusResult.failed}`);
 }).catch(err => {
     console.error('Failed to launch bot:', err);
 });
@@ -827,7 +890,12 @@ const gracefulShutdown = async (signal) => {
 
     runtimeState.botOnline = false;
     broadcastDashboardUpdate('bot-offline');
-    await broadcastStatus('🔴 *Hora-claw is going offline!* I will be back shortly.');
+    const offlineStatusResult = await broadcastStatus('🔴 *Hora-claw is going offline!* I will be back shortly.', {
+        attempts: 2,
+        retryDelayMs: 1500,
+        label: 'offline'
+    });
+    console.log(`Offline status delivery: sent ${offlineStatusResult.sent}/${offlineStatusResult.total}, failed ${offlineStatusResult.failed}`);
     await stopDashboardServer();
     bot.stop(signal);
     process.exit(0);
