@@ -6,12 +6,20 @@ description: Reliable startup online/offline broadcast delivery patterns
 
 Online/offline announcements must be reliable across restarts and transient Telegram errors.
 
+## Versioned Message Rules
+
+1. Online and offline announcements must include `Hora-claw v<version>`.
+2. Use message builders per chat (`messageBuilder`) instead of one static string.
+3. Keep base status text plain (no raw markdown markers like `*`).
+
 ## Startup Online Delivery
 
 1. Build a pending set from known chats at startup.
 2. Attempt immediate delivery for all pending recipients.
 3. Mark successful chat IDs in a delivered set (`bootOnlineNotifiedChats`).
 4. Keep unsuccessful recipients in pending set and retry asynchronously.
+5. For chats not yet announced on current version, include quick release notes in online message.
+6. Persist successful version announcements in `release-announcements.json`.
 
 ## Retry Loop Rules
 
@@ -26,6 +34,7 @@ Online/offline announcements must be reliable across restarts and transient Tele
 1. On any incoming chat interaction, if startup online was not delivered for that chat:
 2. Trigger immediate single-chat online send attempt.
 3. If it still fails, keep chat in pending set for background retry.
+4. On success, update per-chat announced version ledger.
 
 ## Telegram Error Handling
 
@@ -38,3 +47,4 @@ Online/offline announcements must be reliable across restarts and transient Tele
 1. Send offline message during graceful shutdown.
 2. Stop online retry loop before shutdown broadcast.
 3. Keep offline send bounded (small retry count) so shutdown does not hang indefinitely.
+4. Offline messages should include the currently running version.

@@ -15,7 +15,7 @@ description: Patterns for handling Telegram Bot interactions safely and avoiding
 
 1. Prevent command text from entering generic text pipeline:
 2. Guard `bot.on('text')` with command detection (`/^\/.../`) and early return.
-3. Keep command handlers (`/reset`, `/dashboard`) isolated from Gemini prompt execution flow.
+3. Keep command handlers (`/reset`, `/dashboard`, `/version`) isolated from Gemini prompt execution flow.
 
 ## Response Formatting Rules
 
