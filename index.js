@@ -319,15 +319,22 @@ function renderDashboardPage() {
       margin-bottom: 14px;
     }
 
-    .brand-logo {
-      width: 30px;
-      height: 30px;
-      border-radius: 6px;
+    .brand-logo-canvas {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
       border: 1px solid var(--line);
       background: rgba(255, 255, 255, 0.02);
-      padding: 3px;
-      object-fit: contain;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
       flex: 0 0 auto;
+    }
+
+    .brand-logo {
+      width: 26px;
+      height: 26px;
+      object-fit: contain;
     }
 
     .header-meta {
@@ -485,7 +492,9 @@ function renderDashboardPage() {
   <main>
     <section class="panel">
       <div class="panel-header">
-        <img src="/logo.svg" alt="Hora-claw logo" class="brand-logo" />
+        <div class="brand-logo-canvas">
+          <img src="/logo.svg" alt="Hora-claw logo" class="brand-logo" />
+        </div>
         <div>
           <h1>Hora-claw Session Links</h1>
           <div class="header-meta">Live graph of linked chat sessions and runtime status.</div>
@@ -650,12 +659,29 @@ function renderDashboardPage() {
 </html>`;
 }
 
+function renderRoundedFaviconSvg(logoSvgBuffer) {
+    const logoBase64 = Buffer.from(logoSvgBuffer).toString('base64');
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <clipPath id="icon-clip">
+      <circle cx="32" cy="32" r="30" />
+    </clipPath>
+  </defs>
+  <circle cx="32" cy="32" r="31" fill="#0b0f14" />
+  <circle cx="32" cy="32" r="30" fill="#101720" stroke="#273341" stroke-width="1.5" />
+  <g clip-path="url(#icon-clip)">
+    <image href="data:image/svg+xml;base64,${logoBase64}" x="11" y="11" width="42" height="42" preserveAspectRatio="xMidYMid meet" />
+  </g>
+</svg>`;
+}
+
 function handleDashboardRequest(req, res) {
     const host = req.headers.host || `localhost:${dashboardPortInUse}`;
     const requestUrl = new URL(req.url || '/', `http://${host}`);
     const pathname = requestUrl.pathname;
 
-    if (req.method === 'GET' && (pathname === '/logo.svg' || pathname === '/favicon.svg')) {
+    if (req.method === 'GET' && pathname === '/logo.svg') {
         fs.readFile(LOGO_SVG_FILE, (error, content) => {
             if (error) {
                 res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -668,6 +694,24 @@ function handleDashboardRequest(req, res) {
                 'Cache-Control': 'public, max-age=86400'
             });
             res.end(content);
+        });
+        return;
+    }
+
+    if (req.method === 'GET' && pathname === '/favicon.svg') {
+        fs.readFile(LOGO_SVG_FILE, (error, content) => {
+            if (error) {
+                res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+                res.end('logo.svg not found');
+                return;
+            }
+
+            const faviconSvg = renderRoundedFaviconSvg(content);
+            res.writeHead(200, {
+                'Content-Type': 'image/svg+xml; charset=utf-8',
+                'Cache-Control': 'public, max-age=86400'
+            });
+            res.end(faviconSvg);
         });
         return;
     }
