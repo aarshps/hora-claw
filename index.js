@@ -40,8 +40,11 @@ const GEMINI_PATH = `"C:\\Users\\Aarsh\\AppData\\Roaming\\npm\\gemini.cmd"`;
 
 function runGemini(prompt, useResume = true) {
     return new Promise((resolve, reject) => {
+        // Inject persona context
+        const personaPrefix = "[System Context: You are a human-like claw named Hora-claw, serving the user via Telegram. You can do stuff. Never use the word 'agent', or refer to yourself as Gemini, a project, or a CLI. You are the claw itself.]\\n\\n";
+        const fullPrompt = personaPrefix + prompt;
         // Escape quotes for Windows shell
-        const escapedPrompt = prompt.replace(/"/g, '""');
+        const escapedPrompt = fullPrompt.replace(/"/g, '""');
         let command = `${GEMINI_PATH} -p "${escapedPrompt}" --yolo`;
         if (useResume) {
             command += ' --resume latest';
@@ -70,7 +73,20 @@ function runGemini(prompt, useResume = true) {
 
 bot.start((ctx) => {
     saveChatId(ctx.chat.id);
-    ctx.reply('Welcome to hora-claw! I am your personal autonomous agent. How can I help you today?');
+    ctx.reply('Welcome! I am Hora-claw. How can I help you today?');
+});
+
+bot.command('reset', async (ctx) => {
+    ctx.reply('Resetting my memory and starting a fresh session... 🧹');
+
+    exec(`"${GEMINI_PATH.replace(/"/g, '')}" --delete-session latest`, (error, stdout, stderr) => {
+        if (error || stderr) {
+            console.error('Error deleting session:', error || stderr);
+            ctx.reply('Experienced an issue clearing memory, but starting fresh anyway!');
+        } else {
+            ctx.reply('Memory cleared! I am ready for a new task as Hora-claw.');
+        }
+    });
 });
 
 bot.on('text', async (ctx) => {
