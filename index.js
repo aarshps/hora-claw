@@ -27,6 +27,9 @@ const LEGACY_CHATS_FILES = Array.from(new Set([
     path.join(__dirname, 'chats.json'),
     path.resolve(process.cwd(), 'chats.json')
 ])).filter(filePath => filePath !== CHATS_FILE);
+const PACKAGE_JSON_FILE = path.join(__dirname, 'package.json');
+const RELEASE_NOTES_FILE = path.join(__dirname, 'release-notes.json');
+const RELEASE_ANNOUNCEMENTS_FILE = path.join(DATA_DIR, 'release-announcements.json');
 const LOGO_SVG_FILE = path.join(__dirname, 'logo.svg');
 const GEMINI_PATH = 'C:\\Users\\Aarsh\\AppData\\Roaming\\npm\\gemini.cmd';
 const HORA_SECURE_TOOL_DIR = process.env.HORA_SECURE_TOOL_DIR || path.join(DATA_DIR, 'secure-tools');
@@ -37,10 +40,14 @@ const DASHBOARD_PORT = parsePositiveNumber(process.env.DASHBOARD_PORT || process
 const APP_PORT_FALLBACK = parsePositiveNumber(process.env.PORT, 0);
 const DASHBOARD_PUBLIC_BASE_URL = (process.env.DASHBOARD_PUBLIC_BASE_URL || '').trim();
 const ACTIVE_WINDOW_MS = Number(process.env.DASHBOARD_ACTIVE_WINDOW_MS || 10 * 60 * 1000);
-const ONLINE_STATUS_MESSAGE = '🟢 Hora-claw is here! Send me anything and we can work through it together.';
-const OFFLINE_STATUS_MESSAGE = '🔴 Hora-claw is signing off for now. I will be back shortly.';
+const ONLINE_STATUS_MESSAGE_BASE = 'Send me anything and we can work through it together.';
+const OFFLINE_STATUS_MESSAGE_BASE = 'I am signing off for now. I will be back shortly.';
+const DEFAULT_RELEASE_HIGHLIGHTS = [
+    'General quality, reliability, and capability updates.'
+];
 const ONLINE_STATUS_RETRY_INTERVAL_MS = parsePositiveNumber(process.env.ONLINE_STATUS_RETRY_INTERVAL_MS, 30 * 1000);
 const ONLINE_STATUS_RETRY_MAX_ATTEMPTS = Math.max(1, Math.floor(parsePositiveNumber(process.env.ONLINE_STATUS_RETRY_MAX_ATTEMPTS, 20)));
+const releaseInfo = loadReleaseInfo();
 
 const dashboardClients = new Set();
 const sessions = new Map();
@@ -59,6 +66,8 @@ const runtimeState = {
     totalMessages: 0,
     lastResetAt: null,
     lastOnlineBroadcastAt: null,
+    version: releaseInfo.version,
+    releaseHighlights: releaseInfo.highlights,
     dashboardReady: false
 };
 
@@ -76,6 +85,92 @@ function ensureSecureToolDir() {
     } catch (error) {
         console.error(`Failed to prepare secure tool directory ${HORA_SECURE_TOOL_DIR}:`, error);
     }
+}
+
+function readJsonFileSafe(filePath, fallback) {
+    if (!fs.existsSync(filePath)) {
+        return fallback;
+    }
+
+    try {
+        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        return parsed;
+    } catch (error) {
+        console.error(`Failed to parse JSON from ${filePath}:`, error);
+        return fallback;
+    }
+}
+
+function normalizeReleaseHighlights(rawHighlights) {
+    if (!Array.isArray(rawHighlights)) {
+        return [];
+    }
+
+    return rawHighlights
+        .map(item => String(item || '').trim())
+        .filter(Boolean)
+        .slice(0, 6);
+}
+
+function loadReleaseInfo() {
+    const packageJson = readJsonFileSafe(PACKAGE_JSON_FILE, {});
+    const packageVersion = String(packageJson.version || '').trim() || '0.0.0';
+
+    const releaseNotes = readJsonFileSafe(RELEASE_NOTES_FILE, {});
+    const releaseNotesVersion = String(releaseNotes.version || '').trim();
+    if (releaseNotesVersion && releaseNotesVersion !== packageVersion) {
+        console.warn(`release-notes version (${releaseNotesVersion}) does not match package.json version (${packageVersion}). Using package version for broadcasts.`);
+    }
+
+    const highlights = normalizeReleaseHighlights(releaseNotes.highlights);
+    return {
+        version: packageVersion,
+        highlights: highlights.length > 0 ? highlights : DEFAULT_RELEASE_HIGHLIGHTS
+    };
+}
+
+function readReleaseAnnouncements() {
+    const parsed = readJsonFileSafe(RELEASE_ANNOUNCEMENTS_FILE, {});
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return {};
+    }
+
+    const normalized = {};
+    for (const [chatId, version] of Object.entries(parsed)) {
+        const key = String(chatId).trim();
+        const value = String(version || '').trim();
+        if (key && value) {
+            normalized[key] = value;
+        }
+    }
+    return normalized;
+}
+
+function buildOnlineStatusMessage(chatId) {
+    const key = String(chatId);
+    const lines = [`🟢 Hora-claw v${releaseInfo.version} is online. ${ONLINE_STATUS_MESSAGE_BASE}`];
+    if (releaseAnnouncements[key] !== releaseInfo.version) {
+        lines.push('');
+        lines.push(`Quick release notes (v${releaseInfo.version}):`);
+        for (const highlight of releaseInfo.highlights) {
+            lines.push(`- ${highlight}`);
+        }
+    }
+    return lines.join('\n');
+}
+
+function buildOfflineStatusMessage() {
+    return `🔴 Hora-claw v${releaseInfo.version} is offline. ${OFFLINE_STATUS_MESSAGE_BASE}`;
+}
+
+function markReleaseAnnounced(chatId) {
+    const key = String(chatId);
+    if (releaseAnnouncements[key] === releaseInfo.version) {
+        return;
+    }
+
+    releaseAnnouncements[key] = releaseInfo.version;
+    persistReleaseAnnouncements();
 }
 
 function parseChatIdsFromRawContent(content, sourcePath) {
@@ -125,6 +220,7 @@ function readSavedChats() {
 
 ensureDataDir();
 ensureSecureToolDir();
+const releaseAnnouncements = readReleaseAnnouncements();
 const knownChats = new Set(readSavedChats());
 console.log(`Loaded ${knownChats.size} known chat(s) for status broadcasts from ${CHATS_FILE}.`);
 
@@ -160,6 +256,16 @@ function persistKnownChats() {
         } catch (error) {
             console.error(`Failed to write chat IDs to ${filePath}`, error);
         }
+    }
+}
+
+function persistReleaseAnnouncements() {
+    const serialized = JSON.stringify(releaseAnnouncements, null, 2);
+    try {
+        fs.mkdirSync(path.dirname(RELEASE_ANNOUNCEMENTS_FILE), { recursive: true });
+        writeFileAtomic(RELEASE_ANNOUNCEMENTS_FILE, serialized);
+    } catch (error) {
+        console.error(`Failed to write release announcements to ${RELEASE_ANNOUNCEMENTS_FILE}`, error);
     }
 }
 
@@ -988,10 +1094,12 @@ async function sendStatusUpdateOnce(message, options = {}) {
     let sent = 0;
     let failed = 0;
     const onSuccess = typeof options.onSuccess === 'function' ? options.onSuccess : null;
+    const messageBuilder = typeof options.messageBuilder === 'function' ? options.messageBuilder : null;
     const label = options.label || 'status';
 
     for (const chatId of recipients) {
-        const sendResult = await sendStatusMessageToChat(chatId, message, options);
+        const messageToSend = messageBuilder ? messageBuilder(chatId) : message;
+        const sendResult = await sendStatusMessageToChat(chatId, messageToSend, options);
         if (sendResult.ok) {
             sent += 1;
             if (onSuccess) {
@@ -1046,14 +1154,16 @@ async function flushPendingOnlineStatus(label = 'online') {
     }
 
     const recipients = Array.from(pendingOnlineStatusChats);
-    const result = await broadcastStatus(ONLINE_STATUS_MESSAGE, {
+    const result = await broadcastStatus('', {
         attempts: 1,
         label,
         chatIds: recipients,
+        messageBuilder: (chatId) => buildOnlineStatusMessage(chatId),
         onSuccess: (chatId) => {
             const key = String(chatId);
             bootOnlineNotifiedChats.add(key);
             pendingOnlineStatusChats.delete(key);
+            markReleaseAnnounced(key);
         }
     });
 
@@ -1108,13 +1218,15 @@ async function ensureOnlineStatusForChat(chatId) {
     }
 
     pendingOnlineStatusChats.add(key);
-    const result = await broadcastStatus(ONLINE_STATUS_MESSAGE, {
+    const result = await broadcastStatus('', {
         attempts: 1,
         label: 'online-fallback',
         chatIds: [key],
+        messageBuilder: (chatId) => buildOnlineStatusMessage(chatId),
         onSuccess: () => {
             bootOnlineNotifiedChats.add(key);
             pendingOnlineStatusChats.delete(key);
+            markReleaseAnnounced(key);
         }
     });
 
@@ -1225,6 +1337,11 @@ bot.start((ctx) => {
 bot.command('dashboard', async (ctx) => {
     const url = getDashboardUrl(dashboardPortInUse);
     safeReply(ctx, `Dashboard: ${url}`);
+});
+
+bot.command('version', async (ctx) => {
+    const highlights = releaseInfo.highlights.map(item => `- ${item}`).join('\n');
+    safeReply(ctx, `Hora-claw v${releaseInfo.version}\n\nQuick release notes:\n${highlights}`);
 });
 
 bot.command('reset', async (ctx) => {
@@ -1409,7 +1526,7 @@ const gracefulShutdown = async (signal) => {
     runtimeState.botOnline = false;
     stopOnlineRetryLoop();
     broadcastDashboardUpdate('bot-offline');
-    const offlineStatusResult = await broadcastStatus(OFFLINE_STATUS_MESSAGE, {
+    const offlineStatusResult = await broadcastStatus(buildOfflineStatusMessage(), {
         attempts: 2,
         retryDelayMs: 1500,
         label: 'offline'

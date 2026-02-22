@@ -9,8 +9,10 @@ Hora-claw is a personalized autonomous agent built as a Telegram bot. It connect
 - **Markdown Rendering**: Properly parses and formats Gemini's markdown output into Telegram-compatible HTML, preserving spacing and styling.
 - **Persistent Typing Indicator**: Shows a continuous "typing..." action in Telegram while Gemini is processing the request, providing real-time feedback.
 - **Status Broadcasts**: Notifies all users who have interacted with the bot when Hora-claw goes online or offline.
+- **Versioned Broadcasts**: Online/offline status messages include the current Hora-claw version.
 - **Live Dashboard**: Exposes a real-time, dark-mode dashboard for linked sessions, activity, and errors.
 - **Web + API + Script Ops**: Supports internet browsing tools, direct API calls, and secure temporary script execution with automatic cleanup.
+- **Release Notes Broadcasts**: On a new version, users receive quick release notes once per chat when Hora-claw comes online.
 - **Graceful Shutdown**: Handles `SIGINT` and `SIGTERM` signals to broadcast the offline status before exiting.
 
 ## Prerequisites
@@ -67,6 +69,10 @@ Start the bot using the npm script. The bot will run in the background and log o
 npm start
 ```
 
+Commands:
+- `/dashboard` - returns the dashboard URL.
+- `/version` - returns the current running version and release highlights.
+
 ### Dashboard
 
 Open the dashboard at:
@@ -99,6 +105,26 @@ It supports:
 - `run-script`: executes temporary scripts (`node`, `python`, `bash`, `powershell`) in a secure folder.
 
 For `run-script`, a temporary run directory is created under `HORA_SECURE_TOOL_DIR` (or `~/.hora-claw/secure-tools`), and script artifacts are removed automatically after execution.
+
+### Release Versioning
+
+Version and release notes are sourced from:
+- `package.json` -> `version`
+- `release-notes.json` -> `version` + `highlights`
+
+For each new release:
+1. Bump `package.json` version.
+2. Update `release-notes.json` highlights for that version.
+3. Deploy/restart Hora-claw.
+
+Optional helper:
+```bash
+npm run release:bump -- 1.1.1 "Short note 1" "Short note 2"
+```
+
+On startup, Hora-claw sends:
+- Online message with version to all known chats.
+- Quick release notes for the new version (once per chat per version).
 
 ### Stopping the Bot
 

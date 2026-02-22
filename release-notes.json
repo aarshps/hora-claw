@@ -1,0 +1,9 @@
+{
+  "version": "1.1.0",
+  "highlights": [
+    "Added versioned online and offline status announcements so users always see the running Hora-claw version.",
+    "Added quick release-note callouts on startup online messages, delivered once per chat for each new version.",
+    "Enabled controlled internet browsing plus secure API and temporary script execution with automatic cleanup.",
+    "Improved release tracking with persisted per-chat version announcement records."
+  ]
+}
