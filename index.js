@@ -1,5 +1,5 @@
 const { Telegraf } = require('telegraf');
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 const fs = require('fs');
 require('dotenv').config();
 
@@ -36,7 +36,18 @@ async function broadcastStatus(message) {
     }
 }
 
-const GEMINI_PATH = `"C:\\Users\\Aarsh\\AppData\\Roaming\\npm\\gemini.cmd"`;
+const GEMINI_PATH = 'C:\\Users\\Aarsh\\AppData\\Roaming\\npm\\gemini.cmd';
+
+function isMissingSessionError(output = '') {
+    const text = output.toLowerCase();
+    return [
+        'session not found',
+        'no session',
+        'failed to resume',
+        'does not exist',
+        'unknown session'
+    ].some(fragment => text.includes(fragment));
+}
 
 function runGemini(prompt, useResume = true) {
     return new Promise((resolve, reject) => {
@@ -45,7 +56,7 @@ function runGemini(prompt, useResume = true) {
         const fullPrompt = personaPrefix + prompt;
         // Escape quotes for Windows shell
         const escapedPrompt = fullPrompt.replace(/"/g, '""');
-        let command = `${GEMINI_PATH} -p "${escapedPrompt}" --yolo`;
+        let command = `"${GEMINI_PATH}" -p "${escapedPrompt}" --yolo`;
         if (useResume) {
             command += ' --resume latest';
         }
@@ -79,13 +90,25 @@ bot.start((ctx) => {
 bot.command('reset', async (ctx) => {
     ctx.reply('Resetting my memory and starting a fresh session... 🧹');
 
-    exec(`"${GEMINI_PATH.replace(/"/g, '')}" --delete-session latest`, (error, stdout, stderr) => {
-        if (error || stderr) {
-            console.error('Error deleting session:', error || stderr);
-            ctx.reply('Experienced an issue clearing memory, but starting fresh anyway!');
-        } else {
-            ctx.reply('Memory cleared! I am ready for a new task as Hora-claw.');
+    execFile(GEMINI_PATH, ['--delete-session', 'latest'], (error, stdout, stderr) => {
+        const cliOutput = `${stdout || ''}\n${stderr || ''}`.trim();
+
+        if (error && !isMissingSessionError(cliOutput)) {
+            console.error('Error deleting session:', error, cliOutput);
+            ctx.reply('I could not clear memory right now. Please try /reset again.');
+            return;
         }
+
+        if (error && isMissingSessionError(cliOutput)) {
+            console.log('No existing latest session found; starting fresh.');
+            ctx.reply('No previous memory was found. I am ready for a new task as Hora-claw.');
+            return;
+        }
+
+        if (stderr && stderr.trim()) {
+            console.warn('Gemini delete-session warning:', stderr.trim());
+        }
+        ctx.reply('Memory cleared! I am ready for a new task as Hora-claw.');
     });
 });
 
