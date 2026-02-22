@@ -1,0 +1,21 @@
+{
+  "name": "hora-claw",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js >> bot.log 2>&1",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "markdown-to-html": "^0.0.13",
+    "marked": "^17.0.3",
+    "striptags": "^3.2.0",
+    "telegraf": "^4.16.3"
+  }
+}
