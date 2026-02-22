@@ -27,16 +27,20 @@ const GEMINI_PATH = 'C:\\Users\\Aarsh\\AppData\\Roaming\\npm\\gemini.cmd';
 const DASHBOARD_HOST = process.env.DASHBOARD_HOST || '0.0.0.0';
 const DASHBOARD_PORT = Number(process.env.DASHBOARD_PORT || 8787);
 const ACTIVE_WINDOW_MS = Number(process.env.DASHBOARD_ACTIVE_WINDOW_MS || 10 * 60 * 1000);
+const ONLINE_STATUS_MESSAGE = '🟢 *Hora-claw is online!* I am ready to assist you.';
+const OFFLINE_STATUS_MESSAGE = '🔴 *Hora-claw is going offline!* I will be back shortly.';
 
 const dashboardClients = new Set();
 const sessions = new Map();
+const bootOnlineNotifiedChats = new Set();
 let dashboardServer = null;
 
 const runtimeState = {
     startedAt: Date.now(),
     botOnline: false,
     totalMessages: 0,
-    lastResetAt: null
+    lastResetAt: null,
+    lastOnlineBroadcastAt: null
 };
 
 function readSavedChats() {
@@ -91,6 +95,24 @@ function persistKnownChats() {
 
 if (knownChats.size > 0) {
     persistKnownChats();
+}
+
+function mergeKnownChatsFromDisk() {
+    let added = 0;
+    for (const chatId of readSavedChats()) {
+        const key = String(chatId);
+        if (!knownChats.has(key)) {
+            knownChats.add(key);
+            getSession(key);
+            added += 1;
+        }
+    }
+
+    if (added > 0) {
+        persistKnownChats();
+    }
+
+    return added;
 }
 
 function getSession(chatId) {
@@ -611,6 +633,12 @@ function saveChatId(chatId) {
         persistKnownChats();
     }
 
+    if (runtimeState.botOnline && !bootOnlineNotifiedChats.has(key)) {
+        ensureOnlineStatusForChat(key).catch(error => {
+            console.error(`[online-fallback] Unexpected failure for ${key}:`, error);
+        });
+    }
+
     broadcastDashboardUpdate('session-linked');
 }
 
@@ -631,17 +659,54 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function sendStatusUpdateOnce(message) {
+function getTelegramErrorText(error) {
+    return String(
+        error?.response?.description
+        || error?.description
+        || error?.message
+        || ''
+    );
+}
+
+async function sendStatusMessageToChat(chatId, message, options = {}) {
+    const parseMode = options.parseMode || 'Markdown';
+
+    try {
+        await bot.telegram.sendMessage(chatId, message, { parse_mode: parseMode });
+        return { ok: true, parseMode };
+    } catch (error) {
+        const errorText = getTelegramErrorText(error).toLowerCase();
+        const isMarkdownParsingError = errorText.includes("can't parse entities") || errorText.includes('parse entities');
+        if (isMarkdownParsingError && parseMode) {
+            try {
+                await bot.telegram.sendMessage(chatId, message);
+                return { ok: true, parseMode: null };
+            } catch (fallbackError) {
+                return { ok: false, error: fallbackError };
+            }
+        }
+
+        return { ok: false, error };
+    }
+}
+
+async function sendStatusUpdateOnce(message, options = {}) {
     let sent = 0;
     let failed = 0;
+    const onSuccess = typeof options.onSuccess === 'function' ? options.onSuccess : null;
+    const label = options.label || 'status';
 
     for (const chatId of knownChats) {
-        await bot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' }).then(() => {
+        const sendResult = await sendStatusMessageToChat(chatId, message, options);
+        if (sendResult.ok) {
             sent += 1;
-        }).catch(error => {
+            if (onSuccess) {
+                onSuccess(String(chatId));
+            }
+        } else {
             failed += 1;
-            console.error(`Failed to send to ${chatId}:`, error);
-        });
+            console.error(`[${label}] Failed to send to ${chatId}:`, sendResult.error);
+        }
     }
 
     return { sent, failed, total: knownChats.size };
@@ -654,7 +719,7 @@ async function broadcastStatus(message, options = {}) {
 
     let result = { sent: 0, failed: 0, total: knownChats.size };
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
-        result = await sendStatusUpdateOnce(message);
+        result = await sendStatusUpdateOnce(message, options);
         if (result.total === 0 || result.sent > 0 || attempt === attempts) {
             return result;
         }
@@ -664,6 +729,22 @@ async function broadcastStatus(message, options = {}) {
     }
 
     return result;
+}
+
+async function ensureOnlineStatusForChat(chatId) {
+    const key = String(chatId);
+    if (!runtimeState.botOnline || bootOnlineNotifiedChats.has(key)) {
+        return;
+    }
+
+    const sendResult = await sendStatusMessageToChat(key, ONLINE_STATUS_MESSAGE, { label: 'online-fallback' });
+    if (sendResult.ok) {
+        bootOnlineNotifiedChats.add(key);
+        console.log(`[online-fallback] Delivered startup online status to ${key}.`);
+        return;
+    }
+
+    console.error(`[online-fallback] Failed to send online status to ${key}:`, sendResult.error);
 }
 
 function isMissingSessionError(output = '') {
@@ -874,13 +955,25 @@ bot.launch().then(async () => {
     startDashboardServer();
     broadcastDashboardUpdate('bot-online');
 
+    const mergedChatCount = mergeKnownChatsFromDisk();
+    if (mergedChatCount > 0) {
+        console.log(`Merged ${mergedChatCount} chat(s) from disk before online status broadcast.`);
+    }
+
     console.log('hora-claw is running on Telegram!');
-    const onlineStatusResult = await broadcastStatus('🟢 *Hora-claw is online!* I am ready to assist you.', {
+    const onlineStatusResult = await broadcastStatus(ONLINE_STATUS_MESSAGE, {
         attempts: 3,
         retryDelayMs: 3000,
-        label: 'online'
+        label: 'online',
+        onSuccess: (chatId) => {
+            bootOnlineNotifiedChats.add(String(chatId));
+        }
     });
+    runtimeState.lastOnlineBroadcastAt = Date.now();
     console.log(`Online status delivery: sent ${onlineStatusResult.sent}/${onlineStatusResult.total}, failed ${onlineStatusResult.failed}`);
+    if (onlineStatusResult.total === 0) {
+        console.warn('[online] No known chats at startup. Online status will be sent when a chat next interacts.');
+    }
 }).catch(err => {
     console.error('Failed to launch bot:', err);
 });
@@ -890,7 +983,7 @@ const gracefulShutdown = async (signal) => {
 
     runtimeState.botOnline = false;
     broadcastDashboardUpdate('bot-offline');
-    const offlineStatusResult = await broadcastStatus('🔴 *Hora-claw is going offline!* I will be back shortly.', {
+    const offlineStatusResult = await broadcastStatus(OFFLINE_STATUS_MESSAGE, {
         attempts: 2,
         retryDelayMs: 1500,
         label: 'offline'
