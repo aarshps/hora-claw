@@ -5,14 +5,16 @@ description: Operating constraints for code-only edits and direct main-branch de
 # Repo Workflow Constraints
 
 Use this playbook for routine Hora-claw maintenance under strict operator constraints.
-This file includes machine-scoped constraints requested for this workstation and should not be generalized to other environments.
+Resolve mode from repo `.env` (or local env) key `HORA_AGENT_MODE`.
+If missing or invalid, treat mode as `restricted`.
 
 ## Core Operating Mode
 
-1. Treat this repo as code-change-only unless the user explicitly requests runtime execution.
-2. On this machine only, do not run `npm install`, `npm start`, build commands, or other long-lived app processes by default.
-3. Prefer static verification (`node --check`, JSON parse checks, `rg`/`git diff` inspection).
-4. If runtime proof is needed, request explicit approval before starting any app process.
+1. In `restricted` mode, treat this repo as code-change-only unless the user explicitly requests runtime execution.
+2. In `restricted` mode, do not run `npm install`, `npm start`, build commands, or other long-lived app processes by default.
+3. In `unrestricted` mode, install/run/build actions are allowed when needed for the task.
+4. Prefer static verification (`node --check`, JSON parse checks, `rg`/`git diff` inspection) before expensive runtime actions.
+5. Keep `.env.example` default at `HORA_AGENT_MODE=restricted`.
 
 ## Branch and Sync Rules
 
@@ -34,3 +36,8 @@ This file includes machine-scoped constraints requested for this workstation and
 2. Preserve per-user session isolation; never reintroduce global resume behavior.
 3. Keep online/offline status messaging versioned and plain-text safe.
 4. Avoid destructive git operations unless explicitly requested.
+
+## Verification
+
+1. Confirm `.env.example` contains `HORA_AGENT_MODE=restricted`.
+2. If local `.env` sets `HORA_AGENT_MODE=unrestricted`, runtime actions are permitted on that machine only.

@@ -35,9 +35,18 @@ Hora-claw is a personalized autonomous agent built as a Telegram bot. It connect
    ```
 
 3. Configure Environment Variables:
-   Create a `.env` file in the root directory and add your Telegram Bot Token:
+   Copy `.env.example` to `.env` and set your values:
+   ```bash
+   cp .env.example .env
+   ```
+   Required and common variables:
    ```env
    TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+
+   # Agent workflow mode for this machine/repo clone.
+   # default behavior if unset/invalid: restricted
+   # allowed values: restricted | unrestricted
+   HORA_AGENT_MODE=restricted
 
    # Optional: persistent data directory for chat IDs/state
    HORA_DATA_DIR=/absolute/path/for/hora-claw-data
@@ -67,6 +76,8 @@ Hora-claw is a personalized autonomous agent built as a Telegram bot. It connect
    # Optional Gemini sandbox override for Hora-claw calls (default false)
    HORA_GEMINI_SANDBOX=false
    ```
+
+   Set `HORA_AGENT_MODE=unrestricted` only on machines where coding agents are allowed to run install/build/start commands.
 
 ## Usage
 
