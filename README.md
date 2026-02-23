@@ -49,6 +49,9 @@ Primary runtime home is a Windows PC (Beeyeswon laptop), so Windows-first exampl
    ```env
    TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 
+   # Required: only this Telegram chat ID can use this Hora-claw instance.
+   HORA_OWNER_CHAT_ID=4180778
+
    # Agent workflow mode for this machine/repo clone.
    # default behavior if unset/invalid: restricted
    # allowed values: restricted | unrestricted
@@ -88,6 +91,11 @@ Primary runtime home is a Windows PC (Beeyeswon laptop), so Windows-first exampl
    # Optional Gemini sandbox override for Hora-claw calls (default false)
    HORA_GEMINI_SANDBOX=false
    ```
+
+   Owner-only access notes:
+   - Chats other than `HORA_OWNER_CHAT_ID` are denied and ignored.
+   - On startup, previously stored non-owner chats/sessions are removed from local state.
+   - Hora-claw sends a one-time access-revoked notice to previously known non-owner chats when possible.
 
    Set `HORA_AGENT_MODE=unrestricted` only on machines where coding agents are allowed to run install/build/start commands.
 

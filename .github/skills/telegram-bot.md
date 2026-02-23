@@ -17,6 +17,13 @@ description: Patterns for handling Telegram Bot interactions safely and avoiding
 2. Guard `bot.on('text')` with command detection (`/^\/.../`) and early return.
 3. Keep command handlers (`/reset`, `/dashboard`, `/version`) isolated from Gemini prompt execution flow.
 
+## Access Control Rules
+
+1. Enforce owner-only access via middleware before command/text handlers.
+2. Owner chat ID comes from `HORA_OWNER_CHAT_ID`; default fallback is `4180778`.
+3. For non-owner chats, send a short denial message at most once per process and stop handler chain.
+4. Never persist non-owner chat IDs, session IDs, or release-announcement state.
+
 ## Response Formatting Rules
 
 1. Convert markdown to HTML with `marked`.

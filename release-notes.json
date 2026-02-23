@@ -1,8 +1,8 @@
 {
-  "version": "1.2.7",
+  "version": "1.2.8",
   "highlights": [
-    "Hardened dashboard request URL parsing to avoid Host-header-driven crash paths.",
-    "Improved Gemini CLI response handling so successful text replies are not dropped by keyword-only error matching.",
-    "Strengthened secure tool runner safety by preventing secure-root/directory deletion via --script-file and rejecting multiple API body sources."
+    "Enforced owner-only Telegram access using HORA_OWNER_CHAT_ID (default 4180778) with middleware gating.",
+    "Purged non-owner chats/sessions/release state from disk on startup and blocked future non-owner persistence.",
+    "Added one-time access-revoked delivery to previously known non-owner chats and documented private-access behavior."
   ]
 }

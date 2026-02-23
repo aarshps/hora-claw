@@ -19,6 +19,7 @@ Use a stable storage path so restarts/deploy-folder changes do not lose known ch
 2. De-duplicate as strings.
 3. On JSON parse failures, attempt recovery by extracting numeric chat IDs.
 4. Log recovery events so operators can detect corrupted writes.
+5. If owner-only access is enabled, remove non-owner chat IDs/session keys/release keys in-memory before runtime logic proceeds.
 
 ## Write Strategy
 
@@ -26,6 +27,7 @@ Use a stable storage path so restarts/deploy-folder changes do not lose known ch
 2. Ensure parent directory exists before writing.
 3. Optionally mirror to legacy files only when those files already exist.
 4. Persist immediately when a new chat ID is discovered.
+5. After owner-only sanitization, persist cleaned state so old non-owner entries are evicted from disk.
 
 ## Maintenance Rules
 

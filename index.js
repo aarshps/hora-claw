@@ -22,6 +22,7 @@ const SHUTDOWN_FORCE_EXIT_MS = parsePositiveNumber(process.env.SHUTDOWN_FORCE_EX
 const HORA_PROGRESS_UPDATE_INITIAL_DELAY_MS = parsePositiveNumber(process.env.HORA_PROGRESS_UPDATE_INITIAL_DELAY_MS, 20 * 1000);
 const HORA_PROGRESS_UPDATE_INTERVAL_MS = parsePositiveNumber(process.env.HORA_PROGRESS_UPDATE_INTERVAL_MS, 30 * 1000);
 const HORA_GEMINI_SANDBOX = (process.env.HORA_GEMINI_SANDBOX || 'false').trim();
+const HORA_OWNER_CHAT_ID = String(process.env.HORA_OWNER_CHAT_ID || '4180778').trim() || '4180778';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
     handlerTimeout: TELEGRAM_HANDLER_TIMEOUT_MS
@@ -48,6 +49,8 @@ const DASHBOARD_PUBLIC_BASE_URL = (process.env.DASHBOARD_PUBLIC_BASE_URL || '').
 const ACTIVE_WINDOW_MS = Number(process.env.DASHBOARD_ACTIVE_WINDOW_MS || 10 * 60 * 1000);
 const ONLINE_STATUS_MESSAGE_BASE = 'Send me anything and we can work through it together.';
 const OFFLINE_STATUS_MESSAGE_BASE = 'I am signing off for now. I will be back shortly.';
+const ACCESS_DENIED_MESSAGE = 'Access denied. This Hora-claw instance is private.';
+const ACCESS_REVOKED_MESSAGE = `Access revoked. This Hora-claw instance is now private to owner chat ${HORA_OWNER_CHAT_ID}.`;
 const DEFAULT_RELEASE_HIGHLIGHTS = [
     'General quality, reliability, and capability updates.'
 ];
@@ -66,6 +69,7 @@ let onlineRetryTimer = null;
 let onlineRetryInFlight = false;
 let onlineRetryAttempts = 0;
 let shutdownInProgress = false;
+const unauthorizedAccessNotifiedChats = new Set();
 
 const runtimeState = {
     startedAt: Date.now(),
@@ -77,6 +81,51 @@ const runtimeState = {
     releaseHighlights: releaseInfo.highlights,
     dashboardReady: false
 };
+
+function isAuthorizedChatId(chatId) {
+    return String(chatId || '').trim() === HORA_OWNER_CHAT_ID;
+}
+
+function sanitizeStateForPrivateAccess(state) {
+    const unauthorizedChatIds = new Set();
+    let knownRemoved = 0;
+    let geminiRemoved = 0;
+    let releaseRemoved = 0;
+
+    for (const chatId of Array.from(state.knownChats)) {
+        const key = String(chatId).trim();
+        if (!isAuthorizedChatId(key)) {
+            state.knownChats.delete(String(chatId));
+            unauthorizedChatIds.add(key);
+            knownRemoved += 1;
+        }
+    }
+
+    for (const chatId of Object.keys(state.geminiSessions)) {
+        const key = String(chatId).trim();
+        if (!isAuthorizedChatId(key)) {
+            delete state.geminiSessions[chatId];
+            unauthorizedChatIds.add(key);
+            geminiRemoved += 1;
+        }
+    }
+
+    for (const chatId of Object.keys(state.releaseAnnouncements)) {
+        const key = String(chatId).trim();
+        if (!isAuthorizedChatId(key)) {
+            delete state.releaseAnnouncements[chatId];
+            unauthorizedChatIds.add(key);
+            releaseRemoved += 1;
+        }
+    }
+
+    return {
+        unauthorizedChatIds: Array.from(unauthorizedChatIds),
+        knownRemoved,
+        geminiRemoved,
+        releaseRemoved
+    };
+}
 
 function ensureDataDir() {
     try {
@@ -182,12 +231,18 @@ function persistGeminiSessions() {
 
 function getGeminiSessionId(chatId) {
     const key = String(chatId);
+    if (!isAuthorizedChatId(key)) {
+        return null;
+    }
     const value = String(geminiSessions[key] || '').trim();
     return value || null;
 }
 
 function setGeminiSessionId(chatId, sessionId) {
     const key = String(chatId);
+    if (!isAuthorizedChatId(key)) {
+        return;
+    }
     const value = String(sessionId || '').trim();
     if (!value) {
         return;
@@ -203,6 +258,9 @@ function setGeminiSessionId(chatId, sessionId) {
 
 function clearGeminiSessionId(chatId) {
     const key = String(chatId);
+    if (!isAuthorizedChatId(key)) {
+        return;
+    }
     if (!Object.prototype.hasOwnProperty.call(geminiSessions, key)) {
         return;
     }
@@ -230,6 +288,9 @@ function buildOfflineStatusMessage() {
 
 function markReleaseAnnounced(chatId) {
     const key = String(chatId);
+    if (!isAuthorizedChatId(key)) {
+        return;
+    }
     if (releaseAnnouncements[key] === releaseInfo.version) {
         return;
     }
@@ -288,8 +349,17 @@ ensureSecureToolDir();
 const releaseAnnouncements = readReleaseAnnouncements();
 const geminiSessions = readGeminiSessions();
 const knownChats = new Set(readSavedChats());
+const privateAccessSanitization = sanitizeStateForPrivateAccess({
+    knownChats,
+    geminiSessions,
+    releaseAnnouncements
+});
 console.log(`Loaded ${knownChats.size} known chat(s) for status broadcasts from ${CHATS_FILE}.`);
 console.log(`Loaded ${Object.keys(geminiSessions).length} Gemini session mapping(s) from ${GEMINI_SESSIONS_FILE}.`);
+console.log(`Owner-only access is enabled for chat ${HORA_OWNER_CHAT_ID}.`);
+if (privateAccessSanitization.knownRemoved > 0 || privateAccessSanitization.geminiRemoved > 0 || privateAccessSanitization.releaseRemoved > 0) {
+    console.log(`Removed non-owner state: chats=${privateAccessSanitization.knownRemoved}, sessions=${privateAccessSanitization.geminiRemoved}, releases=${privateAccessSanitization.releaseRemoved}.`);
+}
 
 function writeFileAtomic(filePath, content) {
     const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
@@ -336,14 +406,25 @@ function persistReleaseAnnouncements() {
     }
 }
 
-if (knownChats.size > 0) {
+if (knownChats.size > 0 || privateAccessSanitization.knownRemoved > 0) {
     persistKnownChats();
+}
+if (privateAccessSanitization.geminiRemoved > 0) {
+    persistGeminiSessions();
+}
+if (privateAccessSanitization.releaseRemoved > 0) {
+    persistReleaseAnnouncements();
 }
 
 function mergeKnownChatsFromDisk() {
     let added = 0;
+    const removedUnauthorizedChatIds = new Set();
     for (const chatId of readSavedChats()) {
         const key = String(chatId);
+        if (!isAuthorizedChatId(key)) {
+            removedUnauthorizedChatIds.add(key);
+            continue;
+        }
         if (!knownChats.has(key)) {
             knownChats.add(key);
             getSession(key);
@@ -351,11 +432,14 @@ function mergeKnownChatsFromDisk() {
         }
     }
 
-    if (added > 0) {
+    if (added > 0 || removedUnauthorizedChatIds.size > 0) {
         persistKnownChats();
     }
 
-    return added;
+    return {
+        added,
+        removedUnauthorizedChatIds: Array.from(removedUnauthorizedChatIds)
+    };
 }
 
 function getSession(chatId) {
@@ -1085,6 +1169,9 @@ async function stopDashboardServer() {
 
 function saveChatId(chatId) {
     const key = String(chatId);
+    if (!isAuthorizedChatId(key)) {
+        return false;
+    }
     getSession(key);
 
     if (!knownChats.has(key)) {
@@ -1099,15 +1186,22 @@ function saveChatId(chatId) {
     }
 
     broadcastDashboardUpdate('session-linked');
+    return true;
 }
 
 function markSessionSeen(chatId) {
+    if (!isAuthorizedChatId(chatId)) {
+        return;
+    }
     const session = getSession(chatId);
     session.lastSeenAt = Date.now();
     session.lastError = null;
 }
 
 function setSessionStatus(chatId, status, extra = {}) {
+    if (!isAuthorizedChatId(chatId)) {
+        return;
+    }
     const session = getSession(chatId);
     session.status = status;
     Object.assign(session, extra);
@@ -1328,6 +1422,9 @@ function scheduleOnlineRetryLoop() {
 
 async function ensureOnlineStatusForChat(chatId) {
     const key = String(chatId);
+    if (!isAuthorizedChatId(key)) {
+        return;
+    }
     if (!runtimeState.botOnline || bootOnlineNotifiedChats.has(key)) {
         return;
     }
@@ -1376,6 +1473,15 @@ function safeReply(ctx, text, extra) {
         console.error('Failed to send Telegram reply:', error);
         return null;
     });
+}
+
+async function notifyUnauthorizedChat(ctx) {
+    const key = String(ctx?.chat?.id || '').trim();
+    if (!key || unauthorizedAccessNotifiedChats.has(key)) {
+        return;
+    }
+    unauthorizedAccessNotifiedChats.add(key);
+    await safeReply(ctx, ACCESS_DENIED_MESSAGE);
 }
 
 function formatElapsedDuration(ms = 0) {
@@ -1661,6 +1767,16 @@ hydrateSessionsFromKnownChats();
 const snapshotTimer = setInterval(() => broadcastDashboardUpdate('heartbeat'), 5000);
 snapshotTimer.unref();
 
+bot.use(async (ctx, next) => {
+    const key = String(ctx?.chat?.id || '').trim();
+    if (!key || isAuthorizedChatId(key)) {
+        return next();
+    }
+
+    await notifyUnauthorizedChat(ctx);
+    return undefined;
+});
+
 bot.start((ctx) => {
     saveChatId(ctx.chat.id);
     markSessionSeen(ctx.chat.id);
@@ -1849,9 +1965,12 @@ bot.launch().catch(err => {
     runtimeState.botOnline = true;
     broadcastDashboardUpdate('bot-online');
 
-    const mergedChatCount = mergeKnownChatsFromDisk();
-    if (mergedChatCount > 0) {
-        console.log(`Merged ${mergedChatCount} chat(s) from disk before online status broadcast.`);
+    const mergeResult = mergeKnownChatsFromDisk();
+    if (mergeResult.added > 0) {
+        console.log(`Merged ${mergeResult.added} owner chat(s) from disk before online status broadcast.`);
+    }
+    if (mergeResult.removedUnauthorizedChatIds.length > 0) {
+        console.log(`Ignored ${mergeResult.removedUnauthorizedChatIds.length} non-owner chat(s) during startup merge.`);
     }
 
     pendingOnlineStatusChats.clear();
@@ -1866,6 +1985,19 @@ bot.launch().catch(err => {
         await bot.telegram.getMe();
     } catch (error) {
         console.warn('[online] Telegram API warmup check failed before startup broadcast:', error.message || error);
+    }
+
+    const revocationTargets = Array.from(new Set([
+        ...privateAccessSanitization.unauthorizedChatIds,
+        ...mergeResult.removedUnauthorizedChatIds
+    ]));
+    if (revocationTargets.length > 0) {
+        const revocationResult = await sendStatusUpdateOnce(ACCESS_REVOKED_MESSAGE, {
+            chatIds: revocationTargets,
+            label: 'access-revoke',
+            timeoutMs: Math.min(TELEGRAM_SEND_TIMEOUT_MS, 8000)
+        });
+        console.log(`[access] Revocation notice delivery: sent ${revocationResult.sent}/${revocationResult.total}, failed ${revocationResult.failed}`);
     }
 
     const onlineStatusResult = await flushPendingOnlineStatus('online-startup');
