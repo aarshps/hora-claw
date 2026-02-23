@@ -1,9 +1,9 @@
 {
-  "version": "1.2.1",
+  "version": "1.2.2",
   "highlights": [
-    "Kept Hora-claw in strict --yolo mode while adding compatibility fallback when --output-format json is unsupported.",
-    "Filtered noisy CLI banner lines (including YOLO mode notices) from user-facing error messages so real failures are shown.",
-    "Simplified project Gemini settings to avoid strict tool-core compatibility breakage across CLI versions.",
-    "Preserved per-chat isolated sessions and versioned online/offline + startup release-note announcements."
+    "Fixed repeated YOLO banner failures by forcing GEMINI_SANDBOX=false for Hora-claw Gemini calls unless explicitly overridden.",
+    "Kept strict --yolo mode and improved Gemini output parsing/noise filtering so users no longer see banner text as the main error.",
+    "Improved shutdown reliability with bounded Telegram send timeouts and forced-exit protection to prevent stuck processes after Ctrl+C.",
+    "Updated npm start to run without bot.log redirection locks; optional logging remains available via npm run start:log."
   ]
 }

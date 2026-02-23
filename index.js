@@ -17,6 +17,9 @@ function parsePositiveNumber(value, fallback) {
 const TELEGRAM_HANDLER_TIMEOUT_MS = parsePositiveNumber(process.env.TELEGRAM_HANDLER_TIMEOUT_MS, 30 * 60 * 1000);
 const GEMINI_EXEC_TIMEOUT_MS = parsePositiveNumber(process.env.GEMINI_EXEC_TIMEOUT_MS, 20 * 60 * 1000);
 const GEMINI_EXEC_MAX_BUFFER_BYTES = parsePositiveNumber(process.env.GEMINI_EXEC_MAX_BUFFER_BYTES, 10 * 1024 * 1024);
+const TELEGRAM_SEND_TIMEOUT_MS = parsePositiveNumber(process.env.TELEGRAM_SEND_TIMEOUT_MS, 15 * 1000);
+const SHUTDOWN_FORCE_EXIT_MS = parsePositiveNumber(process.env.SHUTDOWN_FORCE_EXIT_MS, 15 * 1000);
+const HORA_GEMINI_SANDBOX = (process.env.HORA_GEMINI_SANDBOX || 'false').trim();
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
     handlerTimeout: TELEGRAM_HANDLER_TIMEOUT_MS
@@ -60,6 +63,7 @@ let dashboardPortInUse = DASHBOARD_PORT;
 let onlineRetryTimer = null;
 let onlineRetryInFlight = false;
 let onlineRetryAttempts = 0;
+let shutdownInProgress = false;
 
 const runtimeState = {
     startedAt: Date.now(),
@@ -1097,6 +1101,26 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function withTimeout(promise, timeoutMs, label = 'operation') {
+    const boundedTimeoutMs = Math.max(250, Number(timeoutMs) || 250);
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error(`${label} timed out after ${boundedTimeoutMs}ms`));
+        }, boundedTimeoutMs);
+        if (typeof timer.unref === 'function') {
+            timer.unref();
+        }
+
+        Promise.resolve(promise).then(value => {
+            clearTimeout(timer);
+            resolve(value);
+        }).catch(error => {
+            clearTimeout(timer);
+            reject(error);
+        });
+    });
+}
+
 function getTelegramErrorText(error) {
     return String(
         error?.response?.description
@@ -1116,10 +1140,15 @@ function getRetryAfterSeconds(error) {
 
 async function sendStatusMessageToChat(chatId, message, options = {}) {
     const parseMode = options.parseMode || null;
+    const timeoutMs = parsePositiveNumber(options.timeoutMs, TELEGRAM_SEND_TIMEOUT_MS);
 
     try {
         const params = parseMode ? { parse_mode: parseMode } : {};
-        await bot.telegram.sendMessage(chatId, message, params);
+        await withTimeout(
+            bot.telegram.sendMessage(chatId, message, params),
+            timeoutMs,
+            `telegram sendMessage(${chatId})`
+        );
         return { ok: true, parseMode };
     } catch (error) {
         const retryAfterSeconds = getRetryAfterSeconds(error);
@@ -1128,7 +1157,11 @@ async function sendStatusMessageToChat(chatId, message, options = {}) {
             await sleep(delayMs);
             try {
                 const params = parseMode ? { parse_mode: parseMode } : {};
-                await bot.telegram.sendMessage(chatId, message, params);
+                await withTimeout(
+                    bot.telegram.sendMessage(chatId, message, params),
+                    timeoutMs,
+                    `telegram sendMessage retry(${chatId})`
+                );
                 return { ok: true, parseMode, retried: true };
             } catch (retryError) {
                 return { ok: false, error: retryError };
@@ -1139,7 +1172,11 @@ async function sendStatusMessageToChat(chatId, message, options = {}) {
         const isMarkdownParsingError = errorText.includes("can't parse entities") || errorText.includes('parse entities');
         if (isMarkdownParsingError && parseMode) {
             try {
-                await bot.telegram.sendMessage(chatId, message);
+                await withTimeout(
+                    bot.telegram.sendMessage(chatId, message),
+                    timeoutMs,
+                    `telegram sendMessage fallback(${chatId})`
+                );
                 return { ok: true, parseMode: null };
             } catch (fallbackError) {
                 return { ok: false, error: fallbackError };
@@ -1332,7 +1369,11 @@ function runGeminiCliCommand(command, callback) {
     exec(command, {
         windowsHide: true,
         timeout: GEMINI_EXEC_TIMEOUT_MS,
-        maxBuffer: GEMINI_EXEC_MAX_BUFFER_BYTES
+        maxBuffer: GEMINI_EXEC_MAX_BUFFER_BYTES,
+        env: {
+            ...process.env,
+            GEMINI_SANDBOX: HORA_GEMINI_SANDBOX
+        }
     }, callback);
 }
 
@@ -1353,16 +1394,22 @@ function escapeForDoubleQuotedShellArg(value = '') {
 }
 
 const GEMINI_NOISE_LINE_PATTERNS = [
-    /^\s*yolo mode is enabled\b.*$/i,
-    /^\s*all tool calls will be\b.*$/i,
-    /^\s*loaded cached credentials\.?\s*$/i,
-    /^\s*using cached credentials\.?\s*$/i
+    /yolo mode is enabled/i,
+    /all tool calls will be automatically approved/i,
+    /loaded cached credentials/i,
+    /using cached credentials/i
 ];
+
+function stripAnsiArtifacts(text = '') {
+    return String(text || '')
+        .replace(/\u001b\[[0-9;]*m/g, '')
+        .replace(/\[[0-9;]*m/g, '');
+}
 
 function stripGeminiCliNoise(text = '') {
     return String(text || '')
         .split(/\r?\n/)
-        .map(line => line.trim())
+        .map(line => stripAnsiArtifacts(line).trim())
         .filter(line => line.length > 0 && !GEMINI_NOISE_LINE_PATTERNS.some(pattern => pattern.test(line)))
         .join('\n')
         .trim();
@@ -1733,21 +1780,64 @@ bot.launch().catch(err => {
 })();
 
 const gracefulShutdown = async (signal) => {
+    if (shutdownInProgress) {
+        console.warn(`Received ${signal} while shutdown is in progress. Exiting immediately.`);
+        process.exit(1);
+        return;
+    }
+
+    shutdownInProgress = true;
     console.log(`Received ${signal}, shutting down...`);
 
-    runtimeState.botOnline = false;
-    stopOnlineRetryLoop();
-    broadcastDashboardUpdate('bot-offline');
-    const offlineStatusResult = await broadcastStatus(buildOfflineStatusMessage(), {
-        attempts: 2,
-        retryDelayMs: 1500,
-        label: 'offline'
-    });
-    console.log(`Offline status delivery: sent ${offlineStatusResult.sent}/${offlineStatusResult.total}, failed ${offlineStatusResult.failed}`);
-    await stopDashboardServer();
-    bot.stop(signal);
-    process.exit(0);
+    const forceExitTimer = setTimeout(() => {
+        console.error(`Forcing process exit after ${SHUTDOWN_FORCE_EXIT_MS}ms shutdown timeout.`);
+        process.exit(0);
+    }, SHUTDOWN_FORCE_EXIT_MS);
+    if (typeof forceExitTimer.unref === 'function') {
+        forceExitTimer.unref();
+    }
+
+    try {
+        runtimeState.botOnline = false;
+        stopOnlineRetryLoop();
+        broadcastDashboardUpdate('bot-offline');
+
+        try {
+            const offlineStatusResult = await withTimeout(
+                broadcastStatus(buildOfflineStatusMessage(), {
+                    attempts: 1,
+                    retryDelayMs: 1000,
+                    label: 'offline',
+                    timeoutMs: Math.min(TELEGRAM_SEND_TIMEOUT_MS, 8000)
+                }),
+                Math.max(1000, SHUTDOWN_FORCE_EXIT_MS - 3000),
+                'offline status broadcast'
+            );
+            console.log(`Offline status delivery: sent ${offlineStatusResult.sent}/${offlineStatusResult.total}, failed ${offlineStatusResult.failed}`);
+        } catch (broadcastError) {
+            console.error('Offline status broadcast did not complete before shutdown:', broadcastError.message || broadcastError);
+        }
+
+        try {
+            await withTimeout(
+                stopDashboardServer(),
+                Math.max(1000, SHUTDOWN_FORCE_EXIT_MS - 1500),
+                'dashboard shutdown'
+            );
+        } catch (dashboardError) {
+            console.error('Dashboard shutdown did not complete before timeout:', dashboardError.message || dashboardError);
+        }
+
+        try {
+            bot.stop(signal);
+        } catch (stopError) {
+            console.error('Failed to stop bot cleanly:', stopError);
+        }
+    } finally {
+        clearTimeout(forceExitTimer);
+        process.exit(0);
+    }
 };
 
-process.once('SIGINT', () => gracefulShutdown('SIGINT'));
-process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.once('SIGINT', () => { void gracefulShutdown('SIGINT'); });
+process.once('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });

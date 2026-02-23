@@ -1,10 +1,11 @@
 {
   "name": "hora-claw",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js >> bot.log 2>&1",
+    "start": "node index.js",
+    "start:log": "node index.js >> bot.log 2>&1",
     "release:bump": "node ./scripts/bump_release.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

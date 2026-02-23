@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/google-gemini/gemini-cli/main/schemas/settings.schema.json",
   "tools": {
-    "sandbox": true,
+    "sandbox": false,
     "allowed": [
       "run_shell_command(node ./scripts/hora_tool_runner.js)",
       "run_shell_command(node scripts/hora_tool_runner.js)",

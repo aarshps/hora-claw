@@ -59,14 +59,27 @@ Hora-claw is a personalized autonomous agent built as a Telegram bot. It connect
    HORA_SECURE_SCRIPT_MAX_BUFFER_BYTES=4194304
    HORA_API_TIMEOUT_MS=45000
    HORA_API_MAX_RESPONSE_BYTES=524288
+
+   # Optional Telegram send timeout and shutdown protection
+   TELEGRAM_SEND_TIMEOUT_MS=15000
+   SHUTDOWN_FORCE_EXIT_MS=15000
+
+   # Optional Gemini sandbox override for Hora-claw calls (default false)
+   HORA_GEMINI_SANDBOX=false
    ```
 
 ## Usage
 
-Start the bot using the npm script. The bot will run in the background and log output to `bot.log`.
+Start the bot using the npm script.
 
 ```bash
 npm start
+```
+
+If you explicitly want file logging via shell redirection:
+
+```bash
+npm run start:log
 ```
 
 Commands:
@@ -149,7 +162,7 @@ Stop-Process -Name "node" -Force # Windows PowerShell example
 - `package.json`: Project metadata and dependencies (`telegraf`, `dotenv`, `marked`, `striptags`).
 - `~/.hora-claw/chats.json` (or `HORA_DATA_DIR/chats.json`): (Auto-generated) Stores Telegram Chat IDs for broadcasting status messages.
 - `~/.hora-claw/gemini-sessions.json` (or `HORA_DATA_DIR/gemini-sessions.json`): (Auto-generated) Stores chat-to-session mappings for isolated memory.
-- `bot.log`: (Auto-generated) Standard output and error logs from the Node server and the underlying Gemini CLI process.
+- `bot.log`: (Optional) Created when using `npm run start:log`.
 
 ## Dependencies
 

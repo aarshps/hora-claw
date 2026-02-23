@@ -17,6 +17,7 @@ Hora-claw shells out to a global Gemini CLI binary on Windows.
 7. bounded `maxBuffer` (`GEMINI_EXEC_MAX_BUFFER_BYTES`)
 8. Parse JSON headless output (`response`, `session_id`, `error`) from stdout/stderr.
 9. If `--output-format` is unsupported in installed CLI, fallback once to `--yolo` text output mode.
+10. Force `GEMINI_SANDBOX=false` by default for bot calls (override via `HORA_GEMINI_SANDBOX`) to avoid missing sandbox-command failures.
 
 ## Resume and Reset Behavior
 

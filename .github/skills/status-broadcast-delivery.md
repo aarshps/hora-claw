@@ -48,3 +48,10 @@ Online/offline announcements must be reliable across restarts and transient Tele
 2. Stop online retry loop before shutdown broadcast.
 3. Keep offline send bounded (small retry count) so shutdown does not hang indefinitely.
 4. Offline messages should include the currently running version.
+
+## Shutdown Lifecycle Safety
+
+1. Treat signal handling as single-flight (`shutdownInProgress`) to avoid duplicate cleanup races.
+2. Add a forced-exit timeout (`SHUTDOWN_FORCE_EXIT_MS`) so Ctrl+C cannot leave process hanging indefinitely.
+3. Bound Telegram send wait time during shutdown using per-send timeout (`TELEGRAM_SEND_TIMEOUT_MS`).
+4. On a second termination signal during shutdown, exit immediately.

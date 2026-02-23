@@ -13,6 +13,7 @@ Hora-claw now supports web browsing, API calls, and temporary script execution w
 3. `node ./scripts/hora_tool_runner.js` (and platform variants already listed there).
 4. Do not widen shell patterns unless explicitly required and reviewed.
 5. Avoid strict `tools.core` allowlists unless validated against installed Gemini CLI version.
+6. Keep Gemini sandbox disabled by default unless host sandbox runtime is installed/configured.
 
 ## Tool Runner Contract
 
