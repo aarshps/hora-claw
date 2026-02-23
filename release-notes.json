@@ -1,9 +1,8 @@
 {
-  "version": "1.2.2",
+  "version": "1.2.3",
   "highlights": [
-    "Fixed repeated YOLO banner failures by forcing GEMINI_SANDBOX=false for Hora-claw Gemini calls unless explicitly overridden.",
-    "Kept strict --yolo mode and improved Gemini output parsing/noise filtering so users no longer see banner text as the main error.",
-    "Improved shutdown reliability with bounded Telegram send timeouts and forced-exit protection to prevent stuck processes after Ctrl+C.",
-    "Updated npm start to run without bot.log redirection locks; optional logging remains available via npm run start:log."
+    "Shifted greeting voice fully to personal-claw language and removed project-framed phrasing like \"our project today\" in normalized responses.",
+    "Refined the system persona prompt to keep replies warm and human while avoiding agent/bot/project framing unless the user explicitly asks for it.",
+    "Kept strict --yolo mode and robust Gemini output handling introduced in v1.2.2 for stable conversational responses."
   ]
 }
