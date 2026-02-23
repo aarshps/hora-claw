@@ -9,7 +9,7 @@ Use a stable storage path so restarts/deploy-folder changes do not lose known ch
 ## Storage Rules
 
 1. Primary store must be `HORA_DATA_DIR/chats.json`.
-2. Default `HORA_DATA_DIR` is `~/.hora-claw`.
+2. Default `HORA_DATA_DIR` is `path.join(os.homedir(), '.hora-claw')` (Windows example: `C:/Users/<user>/.hora-claw`).
 3. Never rely only on `process.cwd()` or repo-relative path for primary state.
 4. Keep legacy readers for old paths during migration.
 

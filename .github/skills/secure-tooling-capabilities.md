@@ -34,10 +34,11 @@ Hora-claw now supports web browsing, API calls, and temporary script execution w
 ## Script Mode Rules
 
 1. Require `--runtime` and exactly one source: `--script`, `--script-base64`, or `--script-file`.
-2. Execute in isolated run dir under `HORA_SECURE_TOOL_DIR` (default `~/.hora-claw/secure-tools`).
+2. Execute in isolated run dir under `HORA_SECURE_TOOL_DIR` (default `path.join(os.homedir(), '.hora-claw', 'secure-tools')`; Windows example `C:/Users/<user>/.hora-claw/secure-tools`).
 3. Enforce timeout and output caps (`HORA_SECURE_SCRIPT_TIMEOUT_MS`, `HORA_SECURE_SCRIPT_MAX_BUFFER_BYTES`).
 4. Always clean run directory in `finally` and expose cleanup result in JSON.
 5. If `--script-file` is inside secure root, delete the source file after run.
+6. On Windows host, prefer `powershell` runtime for shell-style scripting unless a different runtime is explicitly required.
 
 ## Integration Points
 

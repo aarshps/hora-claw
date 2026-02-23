@@ -13,8 +13,9 @@ If missing or invalid, treat mode as `restricted`.
 1. In `restricted` mode, treat this repo as code-change-only unless the user explicitly requests runtime execution.
 2. In `restricted` mode, do not run `npm install`, `npm start`, build commands, or other long-lived app processes by default.
 3. In `unrestricted` mode, install/run/build actions are allowed when needed for the task.
-4. Prefer static verification (`node --check`, JSON parse checks, `rg`/`git diff` inspection) before expensive runtime actions.
-5. Keep `.env.example` default at `HORA_AGENT_MODE=restricted`.
+4. Runtime home is Windows; prefer Windows-safe command examples (PowerShell/cmd) when documenting or operating host tasks.
+5. Prefer static verification (`node --check`, JSON parse checks, `rg`/`git diff` inspection) before expensive runtime actions.
+6. Keep `.env.example` default at `HORA_AGENT_MODE=restricted`.
 
 ## Branch and Sync Rules
 
@@ -41,3 +42,4 @@ If missing or invalid, treat mode as `restricted`.
 
 1. Confirm `.env.example` contains `HORA_AGENT_MODE=restricted`.
 2. If local `.env` sets `HORA_AGENT_MODE=unrestricted`, runtime actions are permitted on that machine only.
+3. Keep Windows-first examples in docs for environment setup and process control.

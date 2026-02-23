@@ -1,10 +1,11 @@
 # Hora-claw
 
-Hora-claw is a personalized autonomous agent built as a Telegram bot. It connects to the Gemini CLI running locally on your machine, acting as a conversational interface for powerful agentic capabilities.
+Hora-claw is a personalized autonomous claw built for Telegram. It connects to the Gemini CLI running locally on your machine and provides a conversational interface for powerful capabilities.
+Primary runtime home is a Windows PC (Beeyeswon laptop), so Windows-first examples are provided below.
 
 ## Features
 
-- **Autonomous Agent**: Leverages the Gemini CLI (with YOLO mode) to autonomously execute tasks requested via Telegram.
+- **Autonomous Claw**: Leverages the Gemini CLI (with YOLO mode) to autonomously execute tasks requested via Telegram.
 - **Per-Chat Session Memory**: Each Telegram chat has its own Gemini session ID and isolated memory.
 - **Markdown Rendering**: Properly parses and formats Gemini's markdown output into Telegram-compatible HTML, preserving spacing and styling.
 - **Persistent Typing Indicator**: Shows a continuous "typing..." action in Telegram while Gemini is processing the request, providing real-time feedback.
@@ -35,7 +36,11 @@ Hora-claw is a personalized autonomous agent built as a Telegram bot. It connect
    ```
 
 3. Configure Environment Variables:
-   Copy `.env.example` to `.env` and set your values:
+   Copy `.env.example` to `.env` and set your values (Windows PowerShell):
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+   If you use Git Bash:
    ```bash
    cp .env.example .env
    ```
@@ -49,7 +54,8 @@ Hora-claw is a personalized autonomous agent built as a Telegram bot. It connect
    HORA_AGENT_MODE=restricted
 
    # Optional: persistent data directory for chat IDs/state
-   HORA_DATA_DIR=/absolute/path/for/hora-claw-data
+   # Windows example:
+   HORA_DATA_DIR=C:/hora-claw/data
 
    # Optional dashboard config
    DASHBOARD_HOST=0.0.0.0
@@ -61,7 +67,8 @@ Hora-claw is a personalized autonomous agent built as a Telegram bot. It connect
    ONLINE_STATUS_RETRY_MAX_ATTEMPTS=20
 
    # Optional secure tool runner directory (used for temp scripts/execution)
-   HORA_SECURE_TOOL_DIR=/absolute/path/for/hora-claw-secure-tools
+   # Windows example:
+   HORA_SECURE_TOOL_DIR=C:/hora-claw/secure-tools
 
    # Optional secure script/API limits
    HORA_SECURE_SCRIPT_TIMEOUT_MS=120000
@@ -128,7 +135,7 @@ It supports:
 - `api`: outbound HTTP(S) API calls with method/headers/body support.
 - `run-script`: executes temporary scripts (`node`, `python`, `bash`, `powershell`) in a secure folder.
 
-For `run-script`, a temporary run directory is created under `HORA_SECURE_TOOL_DIR` (or `~/.hora-claw/secure-tools`), and script artifacts are removed automatically after execution.
+For `run-script`, a temporary run directory is created under `HORA_SECURE_TOOL_DIR` (or default `%USERPROFILE%/.hora-claw/secure-tools` on Windows), and script artifacts are removed automatically after execution.
 
 ### Release Versioning
 
@@ -160,7 +167,7 @@ Stop-Process -Name "node" -Force # Windows PowerShell example
 
 ## How It Works
 
-1. **Initialization**: At startup, the bot loads chat IDs from a persistent data directory (`HORA_DATA_DIR`, default `~/.hora-claw/chats.json`) and runs startup online-status delivery with retries for pending recipients.
+1. **Initialization**: At startup, the bot loads chat IDs from a persistent data directory (`HORA_DATA_DIR`, default `%USERPROFILE%/.hora-claw/chats.json` on Windows) and runs startup online-status delivery with retries for pending recipients.
 2. **Receiving Messages**: When a user sends a message, the bot saves their Chat ID and starts a persistent typing indicator.
 3. **Execution**: The bot spawns a child process to execute the `gemini` CLI command in headless JSON mode, passing the user's message as the prompt. It resumes a session specific to that chat ID; if missing, it starts a new one and stores the returned session ID.
 4. **Session + Status Tracking**: Runtime session state is tracked and streamed to the dashboard through server-sent events.
@@ -171,8 +178,8 @@ Stop-Process -Name "node" -Force # Windows PowerShell example
 
 - `index.js`: The main application logic containing the Telegram bot setup, Gemini CLI execution, and formatting.
 - `package.json`: Project metadata and dependencies (`telegraf`, `dotenv`, `marked`, `striptags`).
-- `~/.hora-claw/chats.json` (or `HORA_DATA_DIR/chats.json`): (Auto-generated) Stores Telegram Chat IDs for broadcasting status messages.
-- `~/.hora-claw/gemini-sessions.json` (or `HORA_DATA_DIR/gemini-sessions.json`): (Auto-generated) Stores chat-to-session mappings for isolated memory.
+- `%USERPROFILE%/.hora-claw/chats.json` (or `HORA_DATA_DIR/chats.json`): (Auto-generated) Stores Telegram Chat IDs for broadcasting status messages.
+- `%USERPROFILE%/.hora-claw/gemini-sessions.json` (or `HORA_DATA_DIR/gemini-sessions.json`): (Auto-generated) Stores chat-to-session mappings for isolated memory.
 - `bot.log`: (Optional) Created when using `npm run start:log`.
 
 ## Dependencies
