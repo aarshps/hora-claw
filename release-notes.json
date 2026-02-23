@@ -1,8 +1,8 @@
 {
-  "version": "1.2.5",
+  "version": "1.2.6",
   "highlights": [
-    "Removed restrictive Gemini tool allowlist from .gemini/settings.json on the Beeyeswon Windows runtime host to prevent policy-denied tool execution.",
-    "Kept sandbox disabled for runtime tool execution flow so Hora-claw can use full web/API/script capabilities without policy gating.",
-    "Updated runtime docs and secure-tooling skills to codify no-policy host behavior and reduce future regressions."
+    "Restricted Gemini output verbosity in system prompt",
+    "Updated agent workflow modes and secure tool paths for Windows",
+    "Added release versioning agent skill"
   ]
 }
