@@ -12,6 +12,7 @@ Hora-claw exposes a built-in dashboard over HTTP + SSE.
 2. `GET /api/state` returns current runtime snapshot.
 3. `GET /events` streams snapshot updates via Server-Sent Events.
 4. `GET /healthz` returns minimal readiness and port status.
+5. Parse request paths from `req.url` with a fixed safe base (for example `http://localhost`) and never trust `Host` header content for routing decisions.
 
 ## Startup and Reachability Rules
 

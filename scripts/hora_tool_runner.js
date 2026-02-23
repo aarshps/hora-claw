@@ -118,6 +118,26 @@ function safeDelete(targetPath) {
   }
 }
 
+function isRegularFile(filePath) {
+  try {
+    return fs.lstatSync(filePath).isFile();
+  } catch (error) {
+    return false;
+  }
+}
+
+function shouldDeleteSecureSourceFile(sourcePath) {
+  const secureRootPath = path.resolve(SECURE_ROOT);
+  const resolvedSourcePath = path.resolve(sourcePath);
+  if (!isInsideDirectory(secureRootPath, resolvedSourcePath)) {
+    return false;
+  }
+  if (resolvedSourcePath === secureRootPath) {
+    return false;
+  }
+  return isRegularFile(resolvedSourcePath);
+}
+
 function decodeBase64(value) {
   try {
     return Buffer.from(String(value), 'base64');
@@ -200,7 +220,8 @@ async function handleRunScript(cli) {
     runtime: runtime.name,
     secureRoot: SECURE_ROOT,
     runId,
-    cleanedUp: false
+    cleanedUp: false,
+    sourceFileDeleted: false
   };
 
   try {
@@ -229,8 +250,7 @@ async function handleRunScript(cli) {
       timedOut,
       durationMs: Date.now() - startedAt,
       stdout: execResult.stdout,
-      stderr: execResult.stderr || (execResult.error ? String(execResult.error.message || '') : ''),
-      sourceFileDeleted: false
+      stderr: execResult.stderr || (execResult.error ? String(execResult.error.message || '') : '')
     };
   } catch (error) {
     result = {
@@ -249,12 +269,14 @@ async function handleRunScript(cli) {
 
   if (scriptFile) {
     const sourcePath = path.resolve(String(scriptFile));
-    if (isInsideDirectory(SECURE_ROOT, sourcePath)) {
+    if (shouldDeleteSecureSourceFile(sourcePath)) {
       const sourceCleanup = safeDelete(sourcePath);
       result.sourceFileDeleted = sourceCleanup.ok;
       if (!sourceCleanup.ok) {
         result.sourceFileDeleteError = sourceCleanup.error;
       }
+    } else if (isInsideDirectory(SECURE_ROOT, sourcePath)) {
+      result.sourceFileDeleteSkipped = true;
     }
   }
 
@@ -262,7 +284,7 @@ async function handleRunScript(cli) {
 }
 
 function parseHeaderPairs(values) {
-  const headers = {};
+  const headers = Object.create(null);
   for (const rawValue of values) {
     const pair = String(rawValue);
     const separator = pair.indexOf(':');
@@ -343,14 +365,20 @@ async function handleApi(cli) {
   const method = String(getLastFlag(cli.flags, 'method', 'GET')).toUpperCase();
   const headers = parseHeaderPairs(toArray(cli.flags.header));
 
+  const bodyInlineProvided = typeof cli.flags.body !== 'undefined';
+  const bodyBase64Provided = typeof cli.flags['body-base64'] !== 'undefined';
+  const bodyFileProvided = typeof cli.flags['body-file'] !== 'undefined';
+  const bodySourceCount = [bodyInlineProvided, bodyBase64Provided, bodyFileProvided].filter(Boolean).length;
+  if (bodySourceCount > 1) {
+    return { ok: false, error: 'Provide at most one of --body, --body-base64, or --body-file.' };
+  }
+
   let body = null;
-  if (typeof cli.flags.body !== 'undefined') {
+  if (bodyInlineProvided) {
     body = Buffer.from(String(getLastFlag(cli.flags, 'body')), 'utf8');
-  }
-  if (typeof cli.flags['body-base64'] !== 'undefined') {
+  } else if (bodyBase64Provided) {
     body = decodeBase64(getLastFlag(cli.flags, 'body-base64'));
-  }
-  if (typeof cli.flags['body-file'] !== 'undefined') {
+  } else if (bodyFileProvided) {
     body = fs.readFileSync(path.resolve(String(getLastFlag(cli.flags, 'body-file'))));
   }
 

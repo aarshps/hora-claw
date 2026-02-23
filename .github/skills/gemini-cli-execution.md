@@ -33,6 +33,7 @@ Hora-claw shells out to a global Gemini CLI binary on Windows.
 1. Wrap reset callback logic in defensive `try/catch` to avoid callback crashes.
 2. Never treat non-fatal stderr alone as hard failure.
 3. Filter known CLI noise lines (for example "YOLO mode is enabled...") before surfacing user-facing errors.
-4. Keep a dedicated missing-session matcher (`isMissingSessionError`) and update it if CLI wording changes.
-5. Preserve persona/system prefix behavior before passing `-p` prompt text.
-6. If command invocation behavior changes, update this skill with exact error signatures.
+4. If process exit succeeded and a cleaned stdout response exists, treat it as valid output even if text includes words like "cannot" or "failed".
+5. Keep a dedicated missing-session matcher (`isMissingSessionError`) and update it if CLI wording changes.
+6. Preserve persona/system prefix behavior before passing `-p` prompt text.
+7. If command invocation behavior changes, update this skill with exact error signatures.

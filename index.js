@@ -862,9 +862,15 @@ function renderRoundedLogoSvg(logoSvgBuffer) {
 }
 
 function handleDashboardRequest(req, res) {
-    const host = req.headers.host || `localhost:${dashboardPortInUse}`;
-    const requestUrl = new URL(req.url || '/', `http://${host}`);
-    const pathname = requestUrl.pathname;
+    let pathname = '/';
+    try {
+        const requestUrl = new URL(req.url || '/', 'http://localhost');
+        pathname = requestUrl.pathname;
+    } catch (error) {
+        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Invalid request URL');
+        return;
+    }
 
     if (req.method === 'GET' && pathname === '/logo.svg') {
         fs.readFile(LOGO_SVG_FILE, (error, content) => {
@@ -1597,7 +1603,7 @@ CRITICAL OUTPUT CONSTRAINTS:
         }
 
         const textResponse = stripGeminiCliNoise(result.stdout);
-        if (textResponse && !isLikelyErrorText(textResponse)) {
+        if (textResponse && !result.error) {
             return textResponse;
         }
 
