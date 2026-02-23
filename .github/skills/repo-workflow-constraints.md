@@ -5,11 +5,12 @@ description: Operating constraints for code-only edits and direct main-branch de
 # Repo Workflow Constraints
 
 Use this playbook for routine Hora-claw maintenance under strict operator constraints.
+This file includes machine-scoped constraints requested for this workstation and should not be generalized to other environments.
 
 ## Core Operating Mode
 
 1. Treat this repo as code-change-only unless the user explicitly requests runtime execution.
-2. Do not run `npm install`, `npm start`, build commands, or other long-lived app processes by default.
+2. On this machine only, do not run `npm install`, `npm start`, build commands, or other long-lived app processes by default.
 3. Prefer static verification (`node --check`, JSON parse checks, `rg`/`git diff` inspection).
 4. If runtime proof is needed, request explicit approval before starting any app process.
 
