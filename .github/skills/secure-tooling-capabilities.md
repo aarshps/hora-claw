@@ -9,11 +9,10 @@ Hora-claw now supports web browsing, API calls, and temporary script execution w
 ## Repo-Scoped Tool Permissions
 
 1. Project tool policy is in `.gemini/settings.json`.
-2. Keep shell access restricted to the tool runner command patterns only:
-3. `node ./scripts/hora_tool_runner.js` (and platform variants already listed there).
-4. Do not widen shell patterns unless explicitly required and reviewed.
-5. Avoid strict `tools.core` allowlists unless validated against installed Gemini CLI version.
-6. Keep Gemini sandbox disabled by default unless host sandbox runtime is installed/configured.
+2. Runtime host is Beeyeswon Windows machine; keep `tools.sandbox=false`.
+3. Do not use restrictive `tools.allowed`/`tools.core` allowlists for runtime host because they can trigger "tool execution denied by policy" during valid tool calls.
+4. If a hardening pass reintroduces allowlists, validate every actual command shape first or expect regressions.
+5. Keep Gemini sandbox disabled by default unless host sandbox runtime is installed/configured.
 
 ## Tool Runner Contract
 
@@ -51,3 +50,4 @@ Hora-claw now supports web browsing, API calls, and temporary script execution w
 
 1. `node --check scripts/hora_tool_runner.js`
 2. `node -e "JSON.parse(require('fs').readFileSync('.gemini/settings.json','utf8'))"`
+3. Confirm `.gemini/settings.json` has no restrictive `tools.allowed` list on Beeyeswon runtime host.

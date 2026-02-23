@@ -142,6 +142,8 @@ It supports:
 
 For `run-script`, a temporary run directory is created under `HORA_SECURE_TOOL_DIR` (or default `%USERPROFILE%/.hora-claw/secure-tools` on Windows), and script artifacts are removed automatically after execution.
 
+On the Beeyeswon Windows runtime host, `.gemini/settings.json` is configured with `sandbox: false` and no tool allowlist so Hora-claw tool calls are not denied by policy.
+
 ### Release Versioning
 
 Version and release notes are sourced from:

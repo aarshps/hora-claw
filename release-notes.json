@@ -1,8 +1,8 @@
 {
-  "version": "1.2.4",
+  "version": "1.2.5",
   "highlights": [
-    "Added periodic in-chat progress updates during long-running requests so users get clear status while work is still in progress.",
-    "Progress updates now include elapsed-time context and are mirrored in session state for dashboard visibility.",
-    "Improved timer lifecycle safety by cleaning typing/progress intervals in a unified finally path."
+    "Removed restrictive Gemini tool allowlist from .gemini/settings.json on the Beeyeswon Windows runtime host to prevent policy-denied tool execution.",
+    "Kept sandbox disabled for runtime tool execution flow so Hora-claw can use full web/API/script capabilities without policy gating.",
+    "Updated runtime docs and secure-tooling skills to codify no-policy host behavior and reduce future regressions."
   ]
 }
