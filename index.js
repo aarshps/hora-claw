@@ -19,6 +19,8 @@ const GEMINI_EXEC_TIMEOUT_MS = parsePositiveNumber(process.env.GEMINI_EXEC_TIMEO
 const GEMINI_EXEC_MAX_BUFFER_BYTES = parsePositiveNumber(process.env.GEMINI_EXEC_MAX_BUFFER_BYTES, 10 * 1024 * 1024);
 const TELEGRAM_SEND_TIMEOUT_MS = parsePositiveNumber(process.env.TELEGRAM_SEND_TIMEOUT_MS, 15 * 1000);
 const SHUTDOWN_FORCE_EXIT_MS = parsePositiveNumber(process.env.SHUTDOWN_FORCE_EXIT_MS, 15 * 1000);
+const HORA_PROGRESS_UPDATE_INITIAL_DELAY_MS = parsePositiveNumber(process.env.HORA_PROGRESS_UPDATE_INITIAL_DELAY_MS, 20 * 1000);
+const HORA_PROGRESS_UPDATE_INTERVAL_MS = parsePositiveNumber(process.env.HORA_PROGRESS_UPDATE_INTERVAL_MS, 30 * 1000);
 const HORA_GEMINI_SANDBOX = (process.env.HORA_GEMINI_SANDBOX || 'false').trim();
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
@@ -365,9 +367,11 @@ function getSession(chatId) {
             linkedAt: Date.now(),
             lastSeenAt: null,
             lastReplyAt: null,
+            lastProgressAt: null,
             status: 'idle',
             messageCount: 0,
-            lastError: null
+            lastError: null,
+            progressMessage: null
         });
     }
 
@@ -396,9 +400,11 @@ function buildDashboardSnapshot() {
             linkedAt: session.linkedAt,
             lastSeenAt: session.lastSeenAt,
             lastReplyAt: session.lastReplyAt,
+            lastProgressAt: session.lastProgressAt,
             status: session.status,
             messageCount: session.messageCount,
             lastError: session.lastError,
+            progressMessage: session.progressMessage,
             isActive
         };
     }).sort((a, b) => {
@@ -780,6 +786,10 @@ function renderDashboardPage() {
           var errorLine = session.lastError
             ? '<div class="meta error">error: ' + escapeHtml(session.lastError) + '</div>'
             : '';
+          var progressLine = (session.status === 'processing' && session.progressMessage)
+            ? '<div class="meta">progress: ' + escapeHtml(session.progressMessage) +
+              ' | updated: ' + formatAge(session.lastProgressAt) + '</div>'
+            : '';
 
           li.innerHTML =
             '<div class="row">' +
@@ -790,6 +800,7 @@ function renderDashboardPage() {
               ' | messages: ' + session.messageCount +
               ' | last seen: ' + formatAge(session.lastSeenAt) + '</div>' +
             '<div class="meta">last reply: ' + formatAge(session.lastReplyAt) + '</div>' +
+            progressLine +
             errorLine;
           listEl.appendChild(li);
         });
@@ -1361,6 +1372,64 @@ function safeReply(ctx, text, extra) {
     });
 }
 
+function formatElapsedDuration(ms = 0) {
+    const totalSeconds = Math.max(1, Math.floor(Number(ms || 0) / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes <= 0) {
+        return `${seconds}s`;
+    }
+    return `${minutes}m ${seconds}s`;
+}
+
+function buildProgressUpdateMessage(updateCount, elapsedMs) {
+    const phaseMessages = [
+        'Quick update: I am thinking through your request and mapping the best path.',
+        'Quick update: I am actively working through the steps now.',
+        'Quick update: I am validating details so the result is clean and reliable.'
+    ];
+    const baseMessage = phaseMessages[Math.min(updateCount, phaseMessages.length - 1)]
+        || 'Quick update: I am still working on this carefully.';
+    return `${baseMessage} (elapsed ${formatElapsedDuration(elapsedMs)}).`;
+}
+
+function startProgressUpdates(ctx, chatId) {
+    const key = String(chatId);
+    const startedAt = Date.now();
+    let updateCount = 0;
+    let pulseTimer = null;
+
+    const sendProgressUpdate = () => {
+        const now = Date.now();
+        const message = buildProgressUpdateMessage(updateCount, now - startedAt);
+        updateCount += 1;
+        setSessionStatus(key, 'processing', {
+            lastProgressAt: now,
+            progressMessage: message
+        });
+        safeReply(ctx, message);
+    };
+
+    const initialTimer = setTimeout(() => {
+        sendProgressUpdate();
+        pulseTimer = setInterval(sendProgressUpdate, HORA_PROGRESS_UPDATE_INTERVAL_MS);
+        if (typeof pulseTimer.unref === 'function') {
+            pulseTimer.unref();
+        }
+    }, HORA_PROGRESS_UPDATE_INITIAL_DELAY_MS);
+
+    if (typeof initialTimer.unref === 'function') {
+        initialTimer.unref();
+    }
+
+    return () => {
+        clearTimeout(initialTimer);
+        if (pulseTimer) {
+            clearInterval(pulseTimer);
+        }
+    };
+}
+
 function isCommandText(text = '') {
     return /^\/[a-z0-9_]+(?:@[a-z0-9_]+)?/i.test(String(text).trim());
 }
@@ -1668,16 +1737,24 @@ bot.on('text', async (ctx) => {
     const session = getSession(chatId);
     session.messageCount += 1;
     runtimeState.totalMessages += 1;
-    setSessionStatus(chatId, 'processing', { lastSeenAt: Date.now(), lastError: null });
+    setSessionStatus(chatId, 'processing', {
+        lastSeenAt: Date.now(),
+        lastError: null,
+        lastProgressAt: null,
+        progressMessage: null
+    });
 
-    let typingInterval = setInterval(() => {
+    const typingInterval = setInterval(() => {
         ctx.sendChatAction('typing').catch(() => { });
     }, 4000);
+    const stopProgressUpdates = startProgressUpdates(ctx, chatId);
+    if (typeof typingInterval.unref === 'function') {
+        typingInterval.unref();
+    }
 
     try {
         await ctx.sendChatAction('typing');
         let output = await runGemini(chatId, userMessage);
-        clearInterval(typingInterval);
 
         output = output.replace(/Loaded cached credentials\.?/gi, '').trim();
         output = normalizeConversationalVoice(output);
@@ -1713,16 +1790,22 @@ bot.on('text', async (ctx) => {
         setSessionStatus(chatId, 'idle', {
             lastSeenAt: Date.now(),
             lastReplyAt: Date.now(),
-            lastError: null
+            lastError: null,
+            lastProgressAt: null,
+            progressMessage: null
         });
     } catch (error) {
-        clearInterval(typingInterval);
         console.error('Gemini Execution Error:', error);
         setSessionStatus(chatId, 'error', {
             lastSeenAt: Date.now(),
-            lastError: error.message
+            lastError: error.message,
+            lastProgressAt: null,
+            progressMessage: null
         });
         safeReply(ctx, 'Sorry, I hit a snag: ' + error.message.substring(0, 150));
+    } finally {
+        clearInterval(typingInterval);
+        stopProgressUpdates();
     }
 });
 

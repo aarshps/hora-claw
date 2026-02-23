@@ -9,6 +9,7 @@ Primary runtime home is a Windows PC (Beeyeswon laptop), so Windows-first exampl
 - **Per-Chat Session Memory**: Each Telegram chat has its own Gemini session ID and isolated memory.
 - **Markdown Rendering**: Properly parses and formats Gemini's markdown output into Telegram-compatible HTML, preserving spacing and styling.
 - **Persistent Typing Indicator**: Shows a continuous "typing..." action in Telegram while Gemini is processing the request, providing real-time feedback.
+- **Periodic Progress Updates**: Sends timed in-chat updates during long tasks so users can see ongoing progress.
 - **Status Broadcasts**: Notifies all users who have interacted with the bot when Hora-claw goes online or offline.
 - **Versioned Broadcasts**: Online/offline status messages include the current Hora-claw version.
 - **Live Dashboard**: Exposes a real-time, dark-mode dashboard for linked sessions, activity, and errors.
@@ -79,6 +80,10 @@ Primary runtime home is a Windows PC (Beeyeswon laptop), so Windows-first exampl
    # Optional Telegram send timeout and shutdown protection
    TELEGRAM_SEND_TIMEOUT_MS=15000
    SHUTDOWN_FORCE_EXIT_MS=15000
+
+   # Optional periodic in-chat progress updates during long tasks
+   HORA_PROGRESS_UPDATE_INITIAL_DELAY_MS=20000
+   HORA_PROGRESS_UPDATE_INTERVAL_MS=30000
 
    # Optional Gemini sandbox override for Hora-claw calls (default false)
    HORA_GEMINI_SANDBOX=false

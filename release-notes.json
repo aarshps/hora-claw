@@ -1,8 +1,8 @@
 {
-  "version": "1.2.3",
+  "version": "1.2.4",
   "highlights": [
-    "Shifted greeting voice fully to personal-claw language and removed project-framed phrasing like \"our project today\" in normalized responses.",
-    "Refined the system persona prompt to keep replies warm and human while avoiding agent/bot/project framing unless the user explicitly asks for it.",
-    "Kept strict --yolo mode and robust Gemini output handling introduced in v1.2.2 for stable conversational responses."
+    "Added periodic in-chat progress updates during long-running requests so users get clear status while work is still in progress.",
+    "Progress updates now include elapsed-time context and are mirrored in session state for dashboard visibility.",
+    "Improved timer lifecycle safety by cleaning typing/progress intervals in a unified finally path."
   ]
 }

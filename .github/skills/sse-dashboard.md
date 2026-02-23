@@ -26,9 +26,10 @@ Hora-claw exposes a built-in dashboard over HTTP + SSE.
 
 1. Snapshot source is `buildDashboardSnapshot()`.
 2. Include runtime state, per-session state, and delivery metrics (`onlinePending`).
-3. Keep open SSE responses in `dashboardClients`.
-4. On client error/close, remove from set immediately.
-5. Broadcast on state changes plus heartbeat interval.
+3. Keep per-session progress metadata (`progressMessage`, `lastProgressAt`) so long tasks are visible in dashboard.
+4. Keep open SSE responses in `dashboardClients`.
+5. On client error/close, remove from set immediately.
+6. Broadcast on state changes plus heartbeat interval.
 
 ## Shutdown Rules
 

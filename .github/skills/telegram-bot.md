@@ -27,5 +27,7 @@ description: Patterns for handling Telegram Bot interactions safely and avoiding
 ## Long-Running Interaction UX
 
 1. While Gemini runs, send `typing` action on interval (~4s).
-2. Always clear typing interval in both success and error paths.
-3. On CLI failure, update session error state and send a bounded error summary to user.
+2. For long tasks, send periodic text progress updates (env: `HORA_PROGRESS_UPDATE_INITIAL_DELAY_MS`, `HORA_PROGRESS_UPDATE_INTERVAL_MS`).
+3. Progress updates should include elapsed time and current phase in human language.
+4. Always clear typing/progress timers in a `finally` path to avoid leaks.
+5. On CLI failure, update session error state and send a bounded error summary to user.
